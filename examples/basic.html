@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tinyrouter — basic</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+      nav a { margin-right: 1rem; }
+      nav a.active { font-weight: 600; text-decoration: underline; }
+      main { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ddd; }
+    </style>
+  </head>
+  <body>
+    <h1>tinyrouter — basic</h1>
+    <nav id="nav">
+      <a data-link="/">Home</a>
+      <a data-link="/about">About</a>
+      <a data-link="/users/ada">Ada</a>
+      <a data-link="/users/grace">Grace</a>
+    </nav>
+    <main id="outlet"></main>
+
+    <script type="module">
+      import { createRouter, layout, route, index } from "/tinyrouter.js";
+
+      const tree = layout({}, [
+        index({ render: () => "<p>Welcome home.</p>" }),
+        route("about", { render: () => "<p>A tiny router demo.</p>" }, []),
+        route(
+          "users",
+          { render: () => "<p>Pick a user above.</p>" },
+          [route(":name", { render: ({ params }) => `<p>Hello, <strong>${params.name}</strong>.</p>` }, [])],
+        ),
+      ]);
+
+      // The example is served at /examples/basic.html, so set that as the
+      // prefix — internally the router still sees "/", "/about", etc.
+      const router = createRouter(tree, { prefix: window.location.pathname });
+      const outlet = document.getElementById("outlet");
+      const nav = document.getElementById("nav");
+
+      // data-link holds the router-relative path; the visible href is prefixed.
+      // The router intercepts clicks via the Navigation API — no click handler.
+      for (const a of nav.querySelectorAll("a[data-link]")) {
+        a.href = router.href(a.dataset.link);
+      }
+
+      function render() {
+        const { match } = router.getSnapshot();
+        let node = match;
+        while (node?.children.length) node = node.children[0];
+        outlet.innerHTML = node?.route.meta.render?.(node) ?? "";
+
+        for (const a of nav.querySelectorAll("a[data-link]")) {
+          a.classList.toggle("active", a.href === window.location.href);
+        }
+      }
+
+      router.subscribe(render);
+      render();
+    </script>
+  </body>
+</html>

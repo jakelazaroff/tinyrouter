@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tinyrouter — preact + nested layouts</title>
+    <style>
+      body {
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+        max-width: 640px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      nav a {
+        margin-right: 1rem;
+      }
+      .panel {
+        padding: 1rem;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        margin-top: 1rem;
+      }
+      .panel .panel {
+        background: #fafafa;
+      }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "preact": "https://esm.sh/preact@10.23.2"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="module">
+      import { h, render } from "preact";
+      import htm from "https://esm.sh/htm@3.1.1";
+      import { createRouter, layout, route, index } from "/tinyrouter.js";
+      import { Router, Outlet } from "/adapters/preact.js";
+
+      const html = htm.bind(h);
+
+      function Shell() {
+        // Plain anchors — the router intercepts via the Navigation API.
+        return html`
+          <div>
+            <h1>tinyrouter — preact</h1>
+            <nav>
+              <a href=${router.href("/")}>Home</a>
+              <a href=${router.href("/posts")}>Posts</a>
+              <a href=${router.href("/posts/hello")}>First post</a>
+              <a href=${router.href("/posts/world")}>Second post</a>
+            </nav>
+            <div class="panel">
+              <${Outlet} />
+            </div>
+          </div>
+        `;
+      }
+
+      function Home() {
+        return html`<p>Welcome — pick something from the nav.</p>`;
+      }
+
+      function PostsLayout() {
+        return html`
+          <div>
+            <h2>Posts</h2>
+            <div class="panel"><${Outlet} /></div>
+          </div>
+        `;
+      }
+
+      function PostsIndex() {
+        return html`<p>Select a post.</p>`;
+      }
+
+      function Post({ params }) {
+        return html`<article>
+          <h3>${params.slug}</h3>
+          <p>This is post <em>${params.slug}</em>.</p>
+        </article>`;
+      }
+
+      const tree = layout({ component: Shell }, [
+        index({ component: Home }),
+        route("posts", { component: PostsLayout }, [
+          index({ component: PostsIndex }),
+          route(":slug", { component: Post }, []),
+        ]),
+      ]);
+
+      // Treat the html file's own path as the routing root.
+      const router = createRouter(tree, { prefix: window.location.pathname });
+      render(html`<${Router} router=${router} />`, document.getElementById("root"));
+    </script>
+  </body>
+</html>

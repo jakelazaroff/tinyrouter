@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tinyrouter — loaders &amp; lazy routes</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+      nav a { margin-right: 1rem; }
+      .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef; font-size: 12px; }
+      .panel { padding: 1rem; border: 1px solid #ddd; border-radius: 6px; margin-top: 1rem; }
+      input { padding: 4px 8px; }
+      ul { padding-left: 1.25rem; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="module">
+      import { h, render, createContext } from "https://esm.sh/preact@10.23.2";
+      import { useContext, useEffect, useState } from "https://esm.sh/preact@10.23.2/hooks";
+      import htm from "https://esm.sh/htm@3.1.1";
+      import { createRouter, layout, route, index, lazy } from "/tinyrouter.js";
+
+      const html = htm.bind(h);
+
+      // --- Adapter -----------------------------------------------------------
+      const MatchContext = createContext(null);
+
+      function useRouter(router) {
+        const [snap, setSnap] = useState(router.getSnapshot());
+        useEffect(() => {
+          setSnap(router.getSnapshot());
+          return router.subscribe(() => setSnap(router.getSnapshot()));
+        }, [router]);
+        return snap;
+      }
+
+      function Outlet() {
+        const node = useContext(MatchContext);
+        if (!node || node.children.length === 0) return null;
+        const child = node.children[0];
+        const Component = child.route.meta.component;
+        return html`
+          <${MatchContext.Provider} value=${child}>
+            <${Component} params=${child.params} data=${child.loaderData} />
+          <//>
+        `;
+      }
+
+      function Router({ router }) {
+        const { match, navigation } = useRouter(router);
+        if (!match) return null;
+        const Component = match.route.meta.component;
+        return html`
+          <div>
+            ${navigation === "loading" && html`<span class="badge">loading…</span>`}
+            <${MatchContext.Provider} value=${match}>
+              ${Component
+                ? html`<${Component} params=${match.params} data=${match.loaderData} />`
+                : html`<${Outlet} />`}
+            <//>
+          </div>
+        `;
+      }
+
+      // --- Fake data + helpers ----------------------------------------------
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const PEOPLE = [
+        { id: "ada", name: "Ada Lovelace", field: "math" },
+        { id: "grace", name: "Grace Hopper", field: "compilers" },
+        { id: "alan", name: "Alan Turing", field: "math" },
+        { id: "edsger", name: "Edsger Dijkstra", field: "compilers" },
+      ];
+
+      function Shell() {
+        return html`
+          <div>
+            <h1>tinyrouter — loaders</h1>
+            <nav>
+              <a href=${router.href("/")}>Home</a>
+              <a href=${router.href("/people")}>People</a>
+              <a href=${router.href("/people?field=math")}>People (math)</a>
+              <a href=${router.href("/people/ada")}>Ada</a>
+            </nav>
+            <div class="panel"><${Outlet} /></div>
+          </div>
+        `;
+      }
+
+      function Home() {
+        return html`<p>This example shows route <code>loader</code> functions and a lazy-loaded route.</p>`;
+      }
+
+      // List route — loader reads ?field= from searchParams.
+      async function peopleLoader({ searchParams }) {
+        await sleep(200);
+        const field = searchParams.get("field");
+        return field ? PEOPLE.filter((p) => p.field === field) : PEOPLE;
+      }
+
+      function People({ data }) {
+        const [field, setField] = useState(new URL(location.href).searchParams.get("field") ?? "");
+        return html`
+          <div>
+            <h2>People</h2>
+            <form
+              onSubmit=${(e) => {
+                e.preventDefault();
+                const params = new URLSearchParams();
+                if (field) params.set("field", field);
+                router.push("/people", params);
+              }}
+            >
+              <label>Filter by field: <input value=${field} onInput=${(e) => setField(e.target.value)} placeholder="e.g. math" /></label>
+              <button type="submit">Apply</button>
+            </form>
+            <ul>
+              ${data.map((p) => html`<li><a href=${router.href(`/people/${p.id}`)}>${p.name}</a> — <em>${p.field}</em></li>`)}
+            </ul>
+            <${Outlet} />
+          </div>
+        `;
+      }
+
+      // Detail route — loader reads route params.
+      async function personLoader({ params }) {
+        await sleep(300);
+        const person = PEOPLE.find((p) => p.id === params.id);
+        if (!person) throw new Error(`No person with id "${params.id}"`);
+        return person;
+      }
+
+      // Lazy-loaded component — defined inline via a data: import. In a real
+      // app you'd point lazy() at a separate module file.
+      const PersonModule = lazy(() =>
+        Promise.resolve({
+          default: ({ data }) => html`
+            <article>
+              <a href=${router.href("/people")}>← back</a>
+              <h2>${data.name}</h2>
+              <p>Field: <strong>${data.field}</strong></p>
+            </article>
+          `,
+        }),
+      );
+
+      const tree = layout({ component: Shell }, [
+        index({ component: Home }),
+        route("people", { component: People, loader: peopleLoader }, [
+          route(":id", { component: PersonModule, loader: personLoader }, []),
+        ]),
+      ]);
+
+      const router = createRouter(tree, { prefix: window.location.pathname });
+      render(html`<${Router} router=${router} />`, document.getElementById("root"));
+    </script>
+  </body>
+</html>
