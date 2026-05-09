@@ -1,9 +1,45 @@
 /**
+ * Maps a path segment to the params it contributes. ":id" → {id: string}, "users" → {}.
+ * @template {string} P
+ * @typedef {P extends `:${infer K}` ? { [Q in K]: string } : {}} ExtractParams
+ */
+
+/**
+ * @template {Record<string, string>} P
+ * @template D
+ * @typedef {(args: { params: P, searchParams: URLSearchParams }) => D | Promise<D>} Loader
+ */
+
+/**
+ * @template {Record<string, string>} P
+ * @template D
+ * @typedef {(props: { params: P, data: D }) => unknown} RouteComponent
+ */
+
+/**
+ * @template {RouteComponent<any, any>} C
+ * @typedef {{ [LAZY]: true, load: () => Promise<C> }} LazyRoute
+ */
+
+/**
+ * @template {Record<string, string>} P
+ * @template D
+ * @typedef {object} RouteMeta
+ * @property {RouteComponent<P, D> | LazyRoute<RouteComponent<P, D>>} [component]
+ * @property {Loader<P, D>} [loader]
+ */
+
+/**
+ * The runtime route node. `Needs` is a phantom contravariant marker for the
+ * params this subtree expects to receive from its ancestors — used purely for
+ * type inference, never present at runtime.
+ * @template {Record<string, string>} [Needs={}]
  * @typedef {object} RouteNode
  * @property {"layout" | "route" | "index"} type
  * @property {string | null} path
  * @property {Record<string, unknown>} meta
  * @property {RouteNode[]} children
+ * @property {(_: Needs) => void} [_]
  */
 
 /**
@@ -21,19 +57,18 @@
  * @property {unknown} error
  */
 
-/** @typedef {{ [LAZY]: true, load: () => Promise<{ default: unknown }> }} LazyRoute */
-
 const LAZY = Symbol("lazy");
 
 /**
- * @param {() => Promise<{ default: unknown }>} load
- * @returns {LazyRoute}
+ * @template {RouteComponent<any, any>} C
+ * @param {() => Promise<C>} load
+ * @returns {LazyRoute<C>}
  */
 export function lazy(load) {
   return { [LAZY]: true, load };
 }
 
-/** @param {unknown} value @returns {value is LazyRoute} */
+/** @param {unknown} value @returns {value is LazyRoute<RouteComponent<any, any>>} */
 function isLazy(value) {
   return typeof value === "object" && value !== null && LAZY in value;
 }
@@ -71,7 +106,7 @@ export class TinyRouter {
   #prefix = "";
 
   /**
-   * @param {RouteNode} root
+   * @param {RouteNode<{}>} root
    * @param {{ prefix?: string }} [options]
    */
   constructor(root, options = {}) {
@@ -85,11 +120,17 @@ export class TinyRouter {
       navigation.addEventListener("navigate", (e) => this.#onNavigate(e));
     } else {
       window.addEventListener("popstate", () => {
-        this.#navigate(this.#strip(window.location.pathname), new URLSearchParams(window.location.search));
+        this.#navigate(
+          this.#strip(window.location.pathname),
+          new URLSearchParams(window.location.search),
+        );
       });
     }
 
-    this.#navigate(this.#strip(window.location.pathname), new URLSearchParams(window.location.search));
+    this.#navigate(
+      this.#strip(window.location.pathname),
+      new URLSearchParams(window.location.search),
+    );
   }
 
   /** @param {NavigateEvent} e */
@@ -98,7 +139,12 @@ export class TinyRouter {
     const url = new URL(e.destination.url);
     if (url.origin !== window.location.origin) return;
     // Only intercept paths covered by our prefix; let the browser handle the rest.
-    if (this.#prefix && url.pathname !== this.#prefix && !url.pathname.startsWith(this.#prefix + "/")) return;
+    if (
+      this.#prefix &&
+      url.pathname !== this.#prefix &&
+      !url.pathname.startsWith(this.#prefix + "/")
+    )
+      return;
     e.intercept({
       handler: () => this.#navigate(this.#strip(url.pathname), url.searchParams),
     });
@@ -124,7 +170,11 @@ export class TinyRouter {
    * @param {URLSearchParams} [searchParams]
    */
   href(pathname, searchParams) {
-    const path = this.#prefix ? (pathname === "/" ? this.#prefix : this.#prefix + pathname) : pathname;
+    const path = this.#prefix
+      ? pathname === "/"
+        ? this.#prefix
+        : this.#prefix + pathname
+      : pathname;
     const search = searchParams ? new URLSearchParams(searchParams).toString() : "";
     return search ? `${path}?${search}` : path;
   }
@@ -222,9 +272,9 @@ export class TinyRouter {
    * @returns {Promise<void>}
    */
   async #resolveLazy(node) {
-    if (isLazy(node.route.meta.component)) {
-      const mod = await node.route.meta.component.load();
-      node.route.meta.component = mod.default;
+    const c = node.route.meta.component;
+    if (isLazy(c)) {
+      node.route.meta.component = await c.load();
     }
   }
 
@@ -352,7 +402,7 @@ export class TinyRouter {
 }
 
 /**
- * @param {RouteNode} root
+ * @param {RouteNode<{}>} root
  * @param {{ prefix?: string }} [options]
  * @returns {TinyRouter}
  */
@@ -361,28 +411,41 @@ export function createRouter(root, options) {
 }
 
 /**
- * @param {Record<string, unknown>} meta
- * @param {RouteNode[]} children
- * @returns {RouteNode}
+ * @template {Record<string, string>} [Inherited={}]
+ * @template D
+ * @param {RouteMeta<Inherited, D>} meta
+ * @param {RouteNode<Inherited>[]} children
+ * @returns {RouteNode<Inherited>}
  */
 export function layout(meta, children) {
-  return { type: "layout", path: null, meta, children };
+  return /** @type {RouteNode<Inherited>} */ (
+    /** @type {unknown} */ ({ type: "layout", path: null, meta, children })
+  );
 }
 
 /**
- * @param {string} path
- * @param {Record<string, unknown>} meta
- * @param {RouteNode[]} children
- * @returns {RouteNode}
+ * @template {string} P
+ * @template {Record<string, string>} [Inherited={}]
+ * @template D
+ * @param {P} path
+ * @param {RouteMeta<Inherited & ExtractParams<P>, D>} meta
+ * @param {RouteNode<Inherited & ExtractParams<P>>[]} children
+ * @returns {RouteNode<Inherited>}
  */
 export function route(path, meta, children) {
-  return { type: "route", path, meta, children };
+  return /** @type {RouteNode<Inherited>} */ (
+    /** @type {unknown} */ ({ type: "route", path, meta, children })
+  );
 }
 
 /**
- * @param {Record<string, unknown>} meta
- * @returns {RouteNode}
+ * @template {Record<string, string>} [Inherited={}]
+ * @template D
+ * @param {RouteMeta<Inherited, D>} meta
+ * @returns {RouteNode<Inherited>}
  */
 export function index(meta) {
-  return { type: "index", path: null, meta, children: [] };
+  return /** @type {RouteNode<Inherited>} */ (
+    /** @type {unknown} */ ({ type: "index", path: null, meta, children: [] })
+  );
 }

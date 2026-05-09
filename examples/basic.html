@@ -23,13 +23,15 @@
     <script type="module">
       import { createRouter, layout, route, index } from "/tinyrouter.js";
 
+      // No framework here — `component` is just a function returning HTML.
+      // Typed: route(":name", …) infers params: { name: string }.
       const tree = layout({}, [
-        index({ render: () => "<p>Welcome home.</p>" }),
-        route("about", { render: () => "<p>A tiny router demo.</p>" }, []),
+        index({ component: () => "<p>Welcome home.</p>" }),
+        route("about", { component: () => "<p>A tiny router demo.</p>" }, []),
         route(
           "users",
-          { render: () => "<p>Pick a user above.</p>" },
-          [route(":name", { render: ({ params }) => `<p>Hello, <strong>${params.name}</strong>.</p>` }, [])],
+          { component: () => "<p>Pick a user above.</p>" },
+          [route(":name", { component: ({ params }) => `<p>Hello, <strong>${params.name}</strong>.</p>` }, [])],
         ),
       ]);
 
@@ -49,7 +51,10 @@
         const { match } = router.getSnapshot();
         let node = match;
         while (node?.children.length) node = node.children[0];
-        outlet.innerHTML = node?.route.meta.render?.(node) ?? "";
+        const Component = node?.route.meta.component;
+        outlet.innerHTML = typeof Component === "function"
+          ? Component({ params: node.params, data: node.loaderData })
+          : "";
 
         for (const a of nav.querySelectorAll("a[data-link]")) {
           a.classList.toggle("active", a.href === window.location.href);

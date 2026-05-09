@@ -2,14 +2,36 @@ import { h, createContext, Component } from "preact";
 
 /** @typedef {import("../tinyrouter.js").MatchNode} MatchNode */
 /** @typedef {import("../tinyrouter.js").TinyRouter} TinyRouter */
+/** @typedef {import("preact").ComponentChildren} ComponentChildren */
+
+/**
+ * @typedef {object} RouterProps
+ * @property {TinyRouter} router
+ * @property {(error: unknown) => ComponentChildren} [fallback]
+ */
+
+/**
+ * @typedef {object} RouterState
+ * @property {import("../tinyrouter.js").RouterState} router
+ */
+
+/**
+ * @typedef {object} OutletProps
+ * @property {MatchNode} [node]
+ */
 
 /** @type {import("preact").Context<MatchNode | null>} */
 const MatchContext = createContext(null);
 
+/**
+ * @extends {Component<RouterProps, RouterState>}
+ */
 export class Router extends Component {
+  /** @param {RouterProps} props */
   constructor(props) {
     super(props);
     this.state = { router: props.router.getSnapshot() };
+    /** @type {(() => void) | null} */
     this.unsub = null;
   }
 
@@ -27,30 +49,39 @@ export class Router extends Component {
     const { match, error } = this.state.router;
     if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
     if (!match) return null;
-    const Component = match.route.meta.component;
-    if (Component) {
+    const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+      match.route.meta.component
+    );
+    if (C) {
       return h(
         MatchContext.Provider,
         { value: match },
-        h(Component, { params: match.params, data: match.loaderData }),
+        h(C, { params: match.params, data: match.loaderData }),
       );
     }
     return h(Outlet, { node: match });
   }
 }
 
+/**
+ * @extends {Component<OutletProps>}
+ */
 export class Outlet extends Component {
   render() {
-    const node = this.props.node ?? this.context;
+    /** @type {MatchNode | null} */
+    const node = this.props.node ?? /** @type {MatchNode | null} */ (this.context);
     if (!node || node.children.length === 0) return null;
 
     const child = node.children[0];
-    const Component = child.route.meta.component;
+    const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+      child.route.meta.component
+    );
+    if (!C) return null;
 
     return h(
       MatchContext.Provider,
       { value: child },
-      h(Component, { params: child.params, data: child.loaderData }),
+      h(C, { params: child.params, data: child.loaderData }),
     );
   }
 }

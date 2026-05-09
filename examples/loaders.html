@@ -130,19 +130,15 @@
         return person;
       }
 
-      // Lazy-loaded component — defined inline via a data: import. In a real
-      // app you'd point lazy() at a separate module file.
-      const PersonModule = lazy(() =>
-        Promise.resolve({
-          default: ({ data }) => html`
-            <article>
-              <a href=${router.href("/people")}>← back</a>
-              <h2>${data.name}</h2>
-              <p>Field: <strong>${data.field}</strong></p>
-            </article>
-          `,
-        }),
-      );
+      // Lazy-loaded component — in a real app this would be e.g.
+      // `lazy(() => import("./Person.js").then(m => m.default))`.
+      const PersonModule = lazy(async () => ({ data }) => html`
+        <article>
+          <a href=${router.href("/people")}>← back</a>
+          <h2>${data.name}</h2>
+          <p>Field: <strong>${data.field}</strong></p>
+        </article>
+      `);
 
       const tree = layout({ component: Shell }, [
         index({ component: Home }),
