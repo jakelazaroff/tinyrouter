@@ -99,7 +99,12 @@ export class TinyRouter {
   /** @type {number} */
   #navigationId = 0;
 
-  /** @type {Map<MatchNode, string>} maps previous match nodes to their cache keys */
+  /**
+   * Loader data, keyed by RouteNode identity (stable across matches). Each
+   * entry remembers the cache key it was loaded for so a change in params or
+   * search invalidates the entry.
+   * @type {Map<RouteNode, { key: string, data: unknown }>}
+   */
   #loaderCache = new Map();
 
   /** @type {string} normalized: no trailing slash, "" when unset */
@@ -216,6 +221,18 @@ export class TinyRouter {
   }
 
   /**
+   * Resolves lazy components and runs loaders for `pathname` without affecting
+   * the current view. Results land in the same cache navigation uses, so a
+   * later push/replace to a matching path skips refetching.
+   * @param {string} pathname
+   * @param {URLSearchParams} [searchParams]
+   */
+  async preload(pathname, searchParams = new URLSearchParams()) {
+    const matched = this.#match(pathname);
+    if (matched) await this.#resolve(matched, searchParams);
+  }
+
+  /**
    * @param {string} pathname
    * @param {URLSearchParams} searchParams
    */
@@ -240,31 +257,22 @@ export class TinyRouter {
 
     if (id !== this.#navigationId) return;
 
-    this.#loaderCache = this.#buildCache(matched, searchParams);
     this.#state = { match: matched, navigation: "idle", error: null };
     this.#notify();
   }
 
   /**
-   * Resolves lazy components and runs loaders in parallel for each node,
-   * reusing cached loader data where the cache key hasn't changed.
+   * Resolves lazy components and runs loaders in parallel for each node.
+   * Cache hits (same RouteNode + same cacheKey) skip the loader call.
    * @param {MatchNode} node
    * @param {URLSearchParams} searchParams
    */
   async #resolve(node, searchParams) {
-    const key = cacheKey(node, searchParams);
-    const previousNode = this.#findPreviousNode(node);
-    const shouldRevalidate = !previousNode || this.#loaderCache.get(previousNode) !== key;
-
     await Promise.all([
       this.#resolveLazy(node),
-      shouldRevalidate ? this.#runLoader(node, searchParams) : Promise.resolve(),
+      this.#runLoader(node, searchParams),
       ...node.children.map((child) => this.#resolve(child, searchParams)),
     ]);
-
-    if (!shouldRevalidate && previousNode) {
-      node.loaderData = previousNode.loaderData;
-    }
   }
 
   /**
@@ -286,48 +294,14 @@ export class TinyRouter {
   async #runLoader(node, searchParams) {
     const loader = node.route.meta.loader;
     if (typeof loader !== "function") return;
-    node.loaderData = await loader({ params: node.params, searchParams });
-  }
-
-  /**
-   * Finds the matching node from the previous match tree by route identity.
-   * @param {MatchNode} node
-   * @returns {MatchNode | null}
-   */
-  #findPreviousNode(node) {
-    if (!this.#state.match) return null;
-    return this.#findNode(this.#state.match, node.route);
-  }
-
-  /**
-   * @param {MatchNode} node
-   * @param {RouteNode} route
-   * @returns {MatchNode | null}
-   */
-  #findNode(node, route) {
-    if (node.route === route) return node;
-    for (const child of node.children) {
-      const found = this.#findNode(child, route);
-      if (found) return found;
+    const key = cacheKey(node, searchParams);
+    const cached = this.#loaderCache.get(node.route);
+    if (cached && cached.key === key) {
+      node.loaderData = cached.data;
+      return;
     }
-    return null;
-  }
-
-  /**
-   * Builds a fresh cache map from a committed match tree.
-   * @param {MatchNode | null} node
-   * @param {URLSearchParams} searchParams
-   * @returns {Map<MatchNode, string>}
-   */
-  #buildCache(node, searchParams) {
-    const cache = new Map();
-    if (!node) return cache;
-    const visit = (/** @type {MatchNode} */ n) => {
-      cache.set(n, cacheKey(n, searchParams));
-      for (const child of n.children) visit(child);
-    };
-    visit(node);
-    return cache;
+    node.loaderData = await loader({ params: node.params, searchParams });
+    this.#loaderCache.set(node.route, { key, data: node.loaderData });
   }
 
   #notify() {
