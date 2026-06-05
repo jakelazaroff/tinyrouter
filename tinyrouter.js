@@ -285,9 +285,9 @@ export class TinyRouter {
 	 * @returns {Promise<void>}
 	 */
 	async #resolveLazy(node) {
-		const c = node.route.meta.component;
+		const c = node.route.meta["component"];
 		if (isLazy(c)) {
-			node.route.meta.component = await c.load();
+			node.route.meta["component"] = await c.load();
 		}
 	}
 
@@ -297,7 +297,7 @@ export class TinyRouter {
 	 * @returns {Promise<void>}
 	 */
 	async #runLoader(node, searchParams) {
-		const loader = node.route.meta.loader;
+		const loader = node.route.meta["loader"];
 		if (typeof loader !== "function") return;
 		const key = cacheKey(node, searchParams);
 		const cached = this.#loaderCache.get(node.route);
@@ -391,7 +391,7 @@ export function createRouter(root, options) {
 
 /**
  * @template {Record<string, string>} [Inherited={}]
- * @template D
+ * @template [D=unknown]
  * @param {RouteMeta<Inherited, D>} meta
  * @param {RouteNode<Inherited>[]} children
  * @returns {RouteNode<Inherited>}
@@ -405,7 +405,7 @@ export function layout(meta, children) {
 /**
  * @template {string} P
  * @template {Record<string, string>} [Inherited={}]
- * @template D
+ * @template [D=unknown]
  * @param {P} path
  * @param {RouteMeta<Inherited & ExtractParams<P>, D>} meta
  * @param {RouteNode<Inherited & ExtractParams<P>>[]} children
@@ -419,7 +419,7 @@ export function route(path, meta, children) {
 
 /**
  * @template {Record<string, string>} [Inherited={}]
- * @template D
+ * @template [D=unknown]
  * @param {RouteMeta<Inherited, D>} meta
  * @returns {RouteNode<Inherited>}
  */

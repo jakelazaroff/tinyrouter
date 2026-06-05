@@ -20,9 +20,9 @@ import { h, createContext, Component } from "preact";
  * @property {MatchNode} [node]
  */
 
-const MatchContext = createContext(/** @type {MatchNode | null} */ null);
+const MatchContext = /** @type {import("preact").Context<MatchNode | null>} */ (createContext(null));
 
-export const RouterContext = createContext(/** @type {TinyRouter | null} */ null);
+export const RouterContext = /** @type {import("preact").Context<TinyRouter | null>} */ (createContext(null));
 
 /** @extends {Component<RouterProps, RouterState>} */
 export class Router extends Component {
@@ -50,7 +50,7 @@ export class Router extends Component {
 		const { match, error } = this.state.router;
 		if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
 		if (!match) return null;
-		const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+		const C = /** @type {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }> | undefined} */ (
 			match.route.meta["component"]
 		);
 		const inner = C
@@ -72,7 +72,7 @@ export class Outlet extends Component {
 		if (!node || node.children.length === 0) return null;
 
 		const child = node.children[0];
-		const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+		const C = /** @type {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }> | undefined} */ (
 			child.route.meta["component"]
 		);
 		if (!C) return null;
