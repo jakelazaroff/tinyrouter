@@ -23,67 +23,63 @@ import { h, createContext, Component } from "preact";
 /** @type {import("preact").Context<MatchNode | null>} */
 const MatchContext = createContext(null);
 
-/**
- * @extends {Component<RouterProps, RouterState>}
- */
+/** @extends {Component<RouterProps, RouterState>} */
 export class Router extends Component {
-  /** @param {RouterProps} props */
-  constructor(props) {
-    super(props);
-    this.state = { router: props.router.getSnapshot() };
-    /** @type {(() => void) | null} */
-    this.unsub = null;
-  }
+	/** @param {RouterProps} props */
+	constructor(props) {
+		super(props);
+		this.state = { router: props.router.getSnapshot() };
+		/** @type {(() => void) | null} */
+		this.unsub = null;
+	}
 
-  componentDidMount() {
-    this.unsub = this.props.router.subscribe(() => {
-      this.setState({ router: this.props.router.getSnapshot() });
-    });
-  }
+	componentDidMount() {
+		this.unsub = this.props.router.subscribe(() => {
+			this.setState({ router: this.props.router.getSnapshot() });
+		});
+	}
 
-  componentWillUnmount() {
-    this.unsub?.();
-  }
+	componentWillUnmount() {
+		this.unsub?.();
+	}
 
-  render() {
-    const { match, error } = this.state.router;
-    if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
-    if (!match) return null;
-    const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
-      match.route.meta.component
-    );
-    if (C) {
-      return h(
-        MatchContext.Provider,
-        { value: match },
-        h(C, { params: match.params, data: match.loaderData }),
-      );
-    }
-    return h(Outlet, { node: match });
-  }
+	render() {
+		const { match, error } = this.state.router;
+		if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
+		if (!match) return null;
+		const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+			match.route.meta.component
+		);
+		if (C) {
+			return h(
+				MatchContext.Provider,
+				{ value: match },
+				h(C, { params: match.params, data: match.loaderData })
+			);
+		}
+		return h(Outlet, { node: match });
+	}
 }
 
-/**
- * @extends {Component<OutletProps>}
- */
+/** @extends {Component<OutletProps>} */
 export class Outlet extends Component {
-  render() {
-    /** @type {MatchNode | null} */
-    const node = this.props.node ?? /** @type {MatchNode | null} */ (this.context);
-    if (!node || node.children.length === 0) return null;
+	render() {
+		/** @type {MatchNode | null} */
+		const node = this.props.node ?? /** @type {MatchNode | null} */ (this.context);
+		if (!node || node.children.length === 0) return null;
 
-    const child = node.children[0];
-    const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
-      child.route.meta.component
-    );
-    if (!C) return null;
+		const child = node.children[0];
+		const C = /** @type {import("../tinyrouter.js").RouteComponent<any, any> | undefined} */ (
+			child.route.meta.component
+		);
+		if (!C) return null;
 
-    return h(
-      MatchContext.Provider,
-      { value: child },
-      h(C, { params: child.params, data: child.loaderData }),
-    );
-  }
+		return h(
+			MatchContext.Provider,
+			{ value: child },
+			h(C, { params: child.params, data: child.loaderData })
+		);
+	}
 }
 
 Outlet.contextType = MatchContext;

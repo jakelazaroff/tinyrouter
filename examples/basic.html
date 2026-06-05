@@ -4,10 +4,26 @@
     <meta charset="utf-8" />
     <title>tinyrouter — basic</title>
     <style>
-      body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-      nav a { margin-right: 1rem; }
-      nav a.active { font-weight: 600; text-decoration: underline; }
-      main { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ddd; }
+      body {
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+        max-width: 640px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      nav a {
+        margin-right: 1rem;
+      }
+      nav a.active {
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      main {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid #ddd;
+      }
     </style>
   </head>
   <body>
@@ -28,11 +44,13 @@
       const tree = layout({}, [
         index({ component: () => "<p>Welcome home.</p>" }),
         route("about", { component: () => "<p>A tiny router demo.</p>" }, []),
-        route(
-          "users",
-          { component: () => "<p>Pick a user above.</p>" },
-          [route(":name", { component: ({ params }) => `<p>Hello, <strong>${params.name}</strong>.</p>` }, [])],
-        ),
+        route("users", { component: () => "<p>Pick a user above.</p>" }, [
+          route(
+            ":name",
+            { component: ({ params }) => `<p>Hello, <strong>${params.name}</strong>.</p>` },
+            [],
+          ),
+        ]),
       ]);
 
       // The example is served at /examples/basic.html, so set that as the
@@ -52,9 +70,10 @@
         let node = match;
         while (node?.children.length) node = node.children[0];
         const Component = node?.route.meta.component;
-        outlet.innerHTML = typeof Component === "function"
-          ? Component({ params: node.params, data: node.loaderData })
-          : "";
+        outlet.innerHTML =
+          typeof Component === "function"
+            ? Component({ params: node.params, data: node.loaderData })
+            : "";
 
         for (const a of nav.querySelectorAll("a[data-link]")) {
           a.classList.toggle("active", a.href === window.location.href);
