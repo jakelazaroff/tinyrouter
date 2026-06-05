@@ -381,7 +381,7 @@ export class TinyRouter {
 }
 
 /**
- * @param {RouteNode<{}>} root
+ * @param {RouteNode<any>} root
  * @param {{ prefix?: string }} [options]
  * @returns {TinyRouter}
  */
