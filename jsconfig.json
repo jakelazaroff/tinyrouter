@@ -16,5 +16,6 @@
 		"paths": {
 			"preact": ["./types/preact/index.d.ts"]
 		}
-	}
+	},
+	"exclude": ["./types", "tinyrouter.test.js"]
 }
