@@ -1,0 +1,7 @@
+{
+  "arrowParens": "avoid",
+  "useTabs": true,
+  "trailingComma": "none",
+  "jsdoc": true,
+  "ignorePatterns": ["vendor/**", "src/vendor/**"]
+}
