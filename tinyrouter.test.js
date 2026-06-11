@@ -1,5 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import TinyRouter, { layout, route, index, lazy } from "./tinyrouter.js";
 
 // --- helpers ---
@@ -55,6 +59,72 @@ async function makeRouter(root, pathname = "/", options = {}) {
 	const router = new TinyRouter(root, { navigation, ...options });
 	await waitIdle(router);
 	return router;
+}
+
+async function importPreactAdapter() {
+	const dir = await mkdtemp(join(tmpdir(), "tinyrouter-preact-"));
+	const preactDir = join(dir, "node_modules", "preact");
+	await mkdir(preactDir, { recursive: true });
+	await writeFile(
+		join(preactDir, "package.json"),
+		JSON.stringify({ type: "module", main: "index.js" })
+	);
+	await writeFile(
+		join(preactDir, "index.js"),
+		`
+export function h(type, props, ...children) {
+	return { type, props, children };
+}
+
+export function createContext(defaultValue) {
+	return { defaultValue, Provider: function Provider() {} };
+}
+
+export class Component {
+	constructor(props) {
+		this.props = props;
+		this.state = {};
+		this.context = null;
+	}
+
+	setState(update) {
+		this.state = {
+			...this.state,
+			...(typeof update === "function" ? update(this.state, this.props) : update)
+		};
+	}
+}
+`
+	);
+
+	const source = await readFile(new URL("./adapters/preact.js", import.meta.url), "utf8");
+	const adapterPath = join(dir, "preact-adapter.mjs");
+	await writeFile(adapterPath, source);
+	return import(pathToFileURL(adapterPath).href);
+}
+
+function makeAdapterRouter(label) {
+	let listener = null;
+	return {
+		label,
+		subscribed: 0,
+		unsubscribed: 0,
+		snapshot: { match: null, navigation: "idle", error: null, label },
+		getSnapshot() {
+			return this.snapshot;
+		},
+		subscribe(fn) {
+			this.subscribed++;
+			listener = fn;
+			return () => {
+				this.unsubscribed++;
+				if (listener === fn) listener = null;
+			};
+		},
+		emit() {
+			listener?.();
+		}
+	};
 }
 
 describe("route builders", () => {
@@ -113,6 +183,18 @@ describe("matching", () => {
 		const root = layout({}, [route(":id", {}, [index({})])]);
 		const router = await makeRouter(root, "/42");
 		assert.equal(router.getSnapshot().match?.children[0].params.id, "42");
+	});
+
+	it("decodes dynamic param segments", async () => {
+		const root = layout({}, [route(":name", {}, [index({})])]);
+		const router = await makeRouter(root, "/Ada%20Lovelace");
+		assert.equal(router.getSnapshot().match?.children[0].params.name, "Ada Lovelace");
+	});
+
+	it("matches encoded static segments", async () => {
+		const root = layout({}, [route("café", {}, [index({})])]);
+		const router = await makeRouter(root, "/caf%C3%A9");
+		assert.equal(router.getSnapshot().match?.children[0].route.path, "café");
 	});
 
 	it("matches nested routes and accumulates params", async () => {
@@ -326,6 +408,16 @@ describe("navigation api", () => {
 		assert.equal(navigation.navigate("/other"), false);
 		assert.equal(navigation.navigate("/app"), true);
 	});
+
+	it("dispose removes the Navigation API listener", async () => {
+		const navigation = new FakeNavigation();
+		const router = new TinyRouter(layout({}, [index({}), route("about", {}, [])]), {
+			navigation
+		});
+		await waitIdle(router);
+		router.dispose();
+		assert.equal(navigation.navigate("/about"), false);
+	});
 });
 
 describe("preload", () => {
@@ -371,5 +463,69 @@ describe("preload", () => {
 		await waitIdle(router);
 
 		assert.equal(callCount, 1);
+	});
+
+	it("accepts inline search params in the pathname", async () => {
+		let received = null;
+		const root = layout({}, [
+			route(
+				"about",
+				{
+					loader: async ({ searchParams }) => {
+						received = searchParams.get("tag");
+						return null;
+					}
+				},
+				[]
+			)
+		]);
+		const router = await makeRouter(root, "/");
+
+		await router.preload("/about?tag=a");
+
+		assert.equal(received, "a");
+	});
+
+	it("accepts prefixed hrefs", async () => {
+		let callCount = 0;
+		const root = layout({}, [
+			index({}),
+			route(
+				"about",
+				{
+					loader: async () => {
+						callCount++;
+						return null;
+					}
+				},
+				[]
+			)
+		]);
+		const router = await makeRouter(root, "/app", { prefix: "/app" });
+
+		await router.preload(router.href("/about"));
+
+		assert.equal(callCount, 1);
+	});
+});
+
+describe("preact adapter", () => {
+	it("resubscribes when the router prop changes", async () => {
+		const { Router } = await importPreactAdapter();
+		const first = makeAdapterRouter("first");
+		const second = makeAdapterRouter("second");
+		const view = new Router({ router: first });
+
+		view.componentDidMount();
+		assert.equal(first.subscribed, 1);
+
+		view.props = { router: second };
+		view.componentDidUpdate?.({ router: first });
+
+		assert.equal(first.unsubscribed, 1);
+		assert.equal(second.subscribed, 1);
+
+		second.emit();
+		assert.equal(view.state.router, second.snapshot);
 	});
 });

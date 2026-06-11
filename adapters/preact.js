@@ -60,18 +60,29 @@ export class Router extends Component {
 		this.unsub = null;
 	}
 
-	/** @override */
-	componentDidMount() {
+	#subscribe() {
+		this.unsub?.();
 		const update = () => this.setState({ router: this.props.router.getSnapshot() });
 		this.unsub = this.props.router.subscribe(update);
-		// A navigation may have completed between construction and mount; re-read
-		// the snapshot so we don't render stale state until the next notify.
+		// A navigation may have completed before subscription; re-read the snapshot
+		// so we don't render stale state until the next notify.
 		update();
+	}
+
+	/** @override */
+	componentDidMount() {
+		this.#subscribe();
+	}
+
+	/** @param {RouterProps} prevProps @override */
+	componentDidUpdate(prevProps) {
+		if (prevProps.router !== this.props.router) this.#subscribe();
 	}
 
 	/** @override */
 	componentWillUnmount() {
 		this.unsub?.();
+		this.unsub = null;
 	}
 
 	render() {

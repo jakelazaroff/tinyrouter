@@ -87,6 +87,15 @@ function cacheKey(node, searchParams) {
 	return JSON.stringify(node.params) + "?" + searchParams;
 }
 
+/** @param {string} segment */
+function decodeSegment(segment) {
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		return segment;
+	}
+}
+
 export default class TinyRouter {
 	/** @type {RouterState} */
 	#state = { match: null, navigation: "idle", error: null };
@@ -114,6 +123,9 @@ export default class TinyRouter {
 	/** @type {Navigation} */
 	#navigation;
 
+	/** @type {EventListener} */
+	#onNavigate = e => this.#handleNavigate(/** @type {NavigateEvent} */ (e));
+
 	/**
 	 * @param {RouteNode<{}>} root
 	 * @param {{ prefix?: string; navigation?: Navigation }} [options]
@@ -128,7 +140,7 @@ export default class TinyRouter {
 		// The Navigation API is the single intercept point: plain <a href> clicks,
 		// programmatic push/replace, and back/forward all funnel through the
 		// navigate event.
-		this.#navigation.addEventListener("navigate", e => this.#onNavigate(e));
+		this.#navigation.addEventListener("navigate", this.#onNavigate);
 
 		this.#sync();
 	}
@@ -145,7 +157,7 @@ export default class TinyRouter {
 	}
 
 	/** @param {NavigateEvent} e */
-	#onNavigate(e) {
+	#handleNavigate(e) {
 		if (!e.canIntercept || e.hashChange || e.downloadRequest !== null) return;
 		const url = new URL(e.destination.url);
 		if (url.origin !== this.#location().origin) return;
@@ -159,6 +171,11 @@ export default class TinyRouter {
 		e.intercept({
 			handler: () => this.#navigate(this.#strip(url.pathname), url.searchParams)
 		});
+	}
+
+	dispose() {
+		this.#navigation.removeEventListener("navigate", this.#onNavigate);
+		this.#listeners.clear();
 	}
 
 	/**
@@ -231,8 +248,10 @@ export default class TinyRouter {
 	 * @param {URLSearchParams} [searchParams]
 	 */
 	async preload(pathname, searchParams = new URLSearchParams()) {
-		const matched = this.#match(pathname);
-		if (matched) await this.#resolve(matched, searchParams);
+		const url = new URL(pathname, this.#location());
+		if (arguments.length > 1) url.search = searchParams.toString();
+		const matched = this.#match(this.#strip(url.pathname));
+		if (matched) await this.#resolve(matched, url.searchParams);
 	}
 
 	/**
@@ -317,7 +336,7 @@ export default class TinyRouter {
 	 * @returns {MatchNode | null}
 	 */
 	#match(pathname) {
-		const segments = pathname.split("/").filter(Boolean);
+		const segments = pathname.split("/").filter(Boolean).map(decodeSegment);
 		return this.#matchNode(this.#root, segments, {});
 	}
 
