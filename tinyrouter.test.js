@@ -221,7 +221,7 @@ describe("loaders", () => {
 	it("runs the loader and stores data on the match node", async () => {
 		const root = layout({}, [index({ loader: async () => ({ value: 42 }) })]);
 		const router = await makeRouter(root, "/");
-		assert.deepEqual(router.getSnapshot().match?.children[0].loaderData, { value: 42 });
+		assert.deepEqual(router.getSnapshot().match?.children[0].data, { value: 42 });
 	});
 
 	it("passes params and searchParams to the loader", async () => {
@@ -241,7 +241,7 @@ describe("loaders", () => {
 		assert.ok(received?.searchParams instanceof URLSearchParams);
 	});
 
-	it("caches loader results when route and params are unchanged", async () => {
+	it("re-runs loaders on every navigation", async () => {
 		let callCount = 0;
 		const root = layout({}, [
 			index({}),
@@ -263,30 +263,11 @@ describe("loaders", () => {
 		router.push("/");
 		await waitIdle(router);
 
-		// Navigating back hits the cache — loader should not run again.
+		// The router keeps no data cache: navigating back runs the loader again,
+		// so freshness is the data layer's responsibility.
 		router.push("/about");
 		await waitIdle(router);
-		assert.equal(callCount, 1);
-	});
-
-	it("does not serve cached data when repeated search params change", async () => {
-		const root = layout({}, [
-			route("about", {}, [
-				index({ loader: async ({ searchParams }) => searchParams.getAll("tag") })
-			])
-		]);
-		const router = await makeRouter(root, "/about");
-
-		router.push("/about", new URLSearchParams("tag=a&tag=b"));
-		await waitIdle(router);
-
-		// Under the old cache key, ?tag=a&tag=b and ?tag=b collapsed to the same
-		// entry, so this navigation would serve the stale ["a", "b"] data.
-		router.push("/about", new URLSearchParams("tag=b"));
-		await waitIdle(router);
-
-		const data = router.getSnapshot().match?.children[0].children[0].loaderData;
-		assert.deepEqual(data, ["b"]);
+		assert.equal(callCount, 2);
 	});
 
 	it("stores a loader error in state and clears the match", async () => {
@@ -443,7 +424,7 @@ describe("preload", () => {
 		assert.equal(callCount, 1);
 	});
 
-	it("warms the cache so a subsequent navigation skips the loader", async () => {
+	it("does not cache loader results — a subsequent navigation runs the loader again", async () => {
 		let callCount = 0;
 		const root = layout({}, [
 			index({}),
@@ -462,7 +443,33 @@ describe("preload", () => {
 		router.push("/about");
 		await waitIdle(router);
 
-		assert.equal(callCount, 1);
+		// Preload exists to warm caches *inside* the loader (HTTP cache, a query
+		// library); the router itself deliberately re-runs the loader.
+		assert.equal(callCount, 2);
+	});
+
+	it("keeps lazy components resolved for the later navigation", async () => {
+		let loads = 0;
+		const Comp = () => null;
+		const root = layout({}, [
+			index({}),
+			route("about", {}, [
+				index({
+					component: lazy(async () => {
+						loads++;
+						return Comp;
+					})
+				})
+			])
+		]);
+		const router = await makeRouter(root, "/");
+
+		await router.preload("/about");
+		router.push("/about");
+		await waitIdle(router);
+
+		assert.equal(loads, 1);
+		assert.equal(router.getSnapshot().match?.children[0].children[0].route.meta["component"], Comp);
 	});
 
 	it("accepts inline search params in the pathname", async () => {
@@ -506,6 +513,163 @@ describe("preload", () => {
 		await router.preload(router.href("/about"));
 
 		assert.equal(callCount, 1);
+	});
+});
+
+describe("reload", () => {
+	it("re-runs loaders for the current route and keeps the match", async () => {
+		let callCount = 0;
+		const root = layout({}, [
+			index({
+				loader: async () => {
+					callCount++;
+					return callCount;
+				}
+			})
+		]);
+		const router = await makeRouter(root, "/");
+		assert.equal(callCount, 1);
+
+		await router.reload();
+
+		assert.equal(callCount, 2);
+		assert.equal(router.getSnapshot().match?.children[0].data, 2);
+	});
+
+	it("preserves search params", async () => {
+		let received = null;
+		const root = layout({}, [
+			route(
+				"about",
+				{ loader: async ({ searchParams }) => (received = searchParams.get("tag")) },
+				[]
+			)
+		]);
+		const router = await makeRouter(root, "/about?tag=a");
+
+		received = null;
+		await router.reload();
+
+		assert.equal(received, "a");
+	});
+
+	it("leaves state untouched when the current URL has no match", async () => {
+		const root = layout({}, [index({})]);
+		const router = await makeRouter(root, "/missing");
+
+		await router.reload();
+
+		assert.equal(router.getSnapshot().match, null);
+		assert.equal(router.getSnapshot().error, null);
+	});
+});
+
+describe("subscribable loader data", () => {
+	/** Minimal Svelte-store-contract object: subscribe(fn) returns an unsubscribe function. */
+	function makeStore() {
+		const subscribers = new Set();
+		return {
+			subscribed: 0,
+			unsubscribed: 0,
+			subscribe(fn) {
+				this.subscribed++;
+				subscribers.add(fn);
+				return () => {
+					this.unsubscribed++;
+					subscribers.delete(fn);
+				};
+			},
+			emit() {
+				for (const fn of subscribers) fn();
+			}
+		};
+	}
+
+	it("notifies router listeners when the store emits", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({ loader: () => store })]);
+		const router = await makeRouter(root, "/");
+
+		let notified = 0;
+		router.subscribe(() => notified++);
+		store.emit();
+
+		assert.equal(store.subscribed, 1);
+		assert.equal(notified, 1);
+	});
+
+	it("unsubscribes when the route is navigated away from", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({ loader: () => store }), route("about", {}, [index({})])]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/about");
+		await waitIdle(router);
+
+		let notified = 0;
+		router.subscribe(() => notified++);
+		store.emit();
+
+		assert.equal(store.unsubscribed, 1);
+		assert.equal(notified, 0);
+	});
+
+	it("unsubscribes when a later navigation's loader throws", async () => {
+		const store = makeStore();
+		const root = layout({}, [
+			index({ loader: () => store }),
+			route("broken", {}, [
+				index({
+					loader: async () => {
+						throw new Error("oops");
+					}
+				})
+			])
+		]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/broken");
+		await waitIdle(router);
+
+		assert.equal(store.unsubscribed, 1);
+	});
+
+	it("unsubscribes on dispose", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({ loader: () => store })]);
+		const router = await makeRouter(root, "/");
+
+		router.dispose();
+
+		assert.equal(store.unsubscribed, 1);
+	});
+
+	it("does not subscribe during preload", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({}), route("about", {}, [index({ loader: () => store })])]);
+		const router = await makeRouter(root, "/");
+
+		await router.preload("/about");
+
+		assert.equal(store.subscribed, 0);
+	});
+
+	it("reload swaps the subscription without duplicating notifications", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({ loader: () => store })]);
+		const router = await makeRouter(root, "/");
+
+		await router.reload();
+
+		// The loader returned the same store, so reload unsubscribes the old
+		// callback and subscribes a fresh one — emits must notify exactly once.
+		assert.equal(store.subscribed, 2);
+		assert.equal(store.unsubscribed, 1);
+
+		let notified = 0;
+		router.subscribe(() => notified++);
+		store.emit();
+		assert.equal(notified, 1);
 	});
 });
 

@@ -72,7 +72,7 @@
         const Component = node?.route.meta.component;
         outlet.innerHTML =
           typeof Component === "function"
-            ? Component({ params: node.params, data: node.loaderData })
+            ? Component({ params: node.params, data: node.data })
             : "";
 
         for (const a of nav.querySelectorAll("a[data-link]")) {

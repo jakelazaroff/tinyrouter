@@ -43,11 +43,7 @@ function renderMatch(node) {
 		/** @type {unknown} */ (node.route.meta.component)
 	);
 	if (!C) return renderMatch(node.children[0]);
-	return h(
-		MatchContext.Provider,
-		{ value: node },
-		h(C, { params: node.params, data: node.loaderData })
-	);
+	return h(MatchContext.Provider, { value: node }, h(C, { params: node.params, data: node.data }));
 }
 
 /** @extends {Component<RouterProps, RouterState>} */

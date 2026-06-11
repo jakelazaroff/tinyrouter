@@ -6,6 +6,10 @@
  */
 
 /**
+ * Runs on every navigation to its route — the router never caches results. If the resolved value is
+ * a Subscribable (has a `subscribe` method), the router subscribes while the route stays matched
+ * and re-notifies its own listeners whenever the value emits.
+ *
  * @template {Record<string, string>} P
  * @template D
  * @typedef {(args: { params: P; searchParams: URLSearchParams }) => D | Promise<D>} Loader
@@ -32,8 +36,7 @@
 
 /**
  * The runtime route node. `Needs` is a phantom contravariant marker for the params this subtree
- * expects to receive from its ancestors — used purely for type inference, never present at
- * runtime.
+ * expects from its ancestors — used purely for type inference, never present at runtime.
  *
  * @template {Record<string, string>} [Needs={}]
  * @typedef {object} RouteNode
@@ -48,7 +51,7 @@
  * @typedef {object} MatchNode
  * @property {RouteNode} route
  * @property {Record<string, string>} params
- * @property {unknown} loaderData
+ * @property {unknown} data
  * @property {MatchNode[]} children
  */
 
@@ -76,15 +79,19 @@ function isLazy(value) {
 }
 
 /**
- * @param {MatchNode} node
- * @param {URLSearchParams} searchParams
- * @returns {string}
+ * A loader result the router can watch for changes: anything with a Svelte-store-style
+ * `subscribe(callback)` that returns an unsubscribe function.
+ *
+ * @typedef {{ subscribe(callback: () => void): () => void }} Subscribable
  */
-function cacheKey(node, searchParams) {
-	// The cache itself is keyed by RouteNode identity, so the key only needs to
-	// capture params and search. Serializing searchParams directly (rather than
-	// via Object.fromEntries) preserves repeated keys like ?tag=a&tag=b.
-	return JSON.stringify(node.params) + "?" + searchParams;
+
+/** @param {unknown} value @returns {value is Subscribable} */
+function isSubscribable(value) {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (/** @type {any} */ (value).subscribe) === "function"
+	);
 }
 
 /** @param {string} segment */
@@ -110,12 +117,12 @@ export default class TinyRouter {
 	#navigationId = 0;
 
 	/**
-	 * Loader data, keyed by RouteNode identity (stable across matches). Each entry remembers the
-	 * cache key it was loaded for so a change in params or search invalidates the entry.
+	 * Unsubscribe functions for subscribable loader data in the current match tree. Replaced
+	 * wholesale when a navigation commits so abandoned routes stop notifying.
 	 *
-	 * @type {Map<RouteNode, { key: string; data: unknown }>}
+	 * @type {(() => void)[]}
 	 */
-	#loaderCache = new Map();
+	#unwatch = [];
 
 	/** @type {string} normalized: no trailing slash, "" when unset */
 	#prefix = "";
@@ -153,7 +160,7 @@ export default class TinyRouter {
 	/** Matches and resolves the current location. */
 	#sync() {
 		const url = this.#location();
-		this.#navigate(this.#strip(url.pathname), url.searchParams);
+		return this.#navigate(this.#strip(url.pathname), url.searchParams);
 	}
 
 	/** @param {NavigateEvent} e */
@@ -175,6 +182,7 @@ export default class TinyRouter {
 
 	dispose() {
 		this.#navigation.removeEventListener("navigate", this.#onNavigate);
+		this.#unsubscribeAll();
 		this.#listeners.clear();
 	}
 
@@ -241,8 +249,6 @@ export default class TinyRouter {
 
 	/**
 	 * Resolves lazy components and runs loaders for `pathname` without affecting the current view.
-	 * Results land in the same cache navigation uses, so a later push/replace to a matching path
-	 * skips refetching.
 	 *
 	 * @param {string} pathname
 	 * @param {URLSearchParams} [searchParams]
@@ -252,6 +258,11 @@ export default class TinyRouter {
 		if (arguments.length > 1) url.search = searchParams.toString();
 		const matched = this.#match(this.#strip(url.pathname));
 		if (matched) await this.#resolve(matched, url.searchParams);
+	}
+
+	/** Re-matches and re-runs all loaders for the current URL. */
+	reload() {
+		return this.#sync();
 	}
 
 	/**
@@ -271,6 +282,7 @@ export default class TinyRouter {
 				await this.#resolve(matched, searchParams);
 			} catch (error) {
 				if (id !== this.#navigationId) return;
+				this.#unsubscribeAll();
 				this.#state = { match: null, navigation: "idle", error };
 				this.#notify();
 				return;
@@ -279,13 +291,14 @@ export default class TinyRouter {
 
 		if (id !== this.#navigationId) return;
 
+		this.#unsubscribeAll();
 		this.#state = { match: matched, navigation: "idle", error: null };
+		if (matched) this.#watch(matched);
 		this.#notify();
 	}
 
 	/**
-	 * Resolves lazy components and runs loaders in parallel for each node. Cache hits (same RouteNode
-	 * + same cacheKey) skip the loader call.
+	 * Resolves lazy components and runs loaders in parallel for each node.
 	 *
 	 * @param {MatchNode} node
 	 * @param {URLSearchParams} searchParams
@@ -304,9 +317,7 @@ export default class TinyRouter {
 	 */
 	async #resolveLazy(node) {
 		const c = node.route.meta.component;
-		if (isLazy(c)) {
-			node.route.meta.component = await c.load();
-		}
+		if (isLazy(c)) node.route.meta.component = await c.load();
 	}
 
 	/**
@@ -317,14 +328,27 @@ export default class TinyRouter {
 	async #runLoader(node, searchParams) {
 		const loader = node.route.meta.loader;
 		if (!loader) return;
-		const key = cacheKey(node, searchParams);
-		const cached = this.#loaderCache.get(node.route);
-		if (cached && cached.key === key) {
-			node.loaderData = cached.data;
-			return;
+
+		node.data = await loader({ params: node.params, searchParams });
+	}
+
+	/**
+	 * Subscribes to any subscribable loader data in the committed match tree.
+	 *
+	 * @param {MatchNode} node
+	 */
+	#watch(node) {
+		if (isSubscribable(node.data)) {
+			const unsubscribe = node.data.subscribe(() => this.#notify());
+			this.#unwatch.push(unsubscribe);
 		}
-		node.loaderData = await loader({ params: node.params, searchParams });
-		this.#loaderCache.set(node.route, { key, data: node.loaderData });
+
+		for (const child of node.children) this.#watch(child);
+	}
+
+	#unsubscribeAll() {
+		for (const unsubscribe of this.#unwatch) unsubscribe();
+		this.#unwatch = [];
 	}
 
 	#notify() {
@@ -361,13 +385,10 @@ export default class TinyRouter {
 		}
 
 		const children = this.#matchChildren(node.children, segments, params);
-		return children && { route: node, params, loaderData: undefined, children };
+		return children && { route: node, params, data: undefined, children };
 	}
 
 	/**
-	 * Siblings are tried in order and the first match wins, so a `:param` route listed before a
-	 * static sibling (e.g. `:id` before `new`) will shadow it.
-	 *
 	 * @param {RouteNode[]} nodes
 	 * @param {string[]} segments
 	 * @param {Record<string, string>} params

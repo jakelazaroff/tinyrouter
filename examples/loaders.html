@@ -42,7 +42,7 @@
         const Component = child.route.meta.component;
         return html`
           <${MatchContext.Provider} value=${child}>
-            <${Component} params=${child.params} data=${child.loaderData} />
+            <${Component} params=${child.params} data=${child.data} />
           <//>
         `;
       }
@@ -56,7 +56,7 @@
             ${navigation === "loading" && html`<span class="badge">loading…</span>`}
             <${MatchContext.Provider} value=${match}>
               ${Component
-                ? html`<${Component} params=${match.params} data=${match.loaderData} />`
+                ? html`<${Component} params=${match.params} data=${match.data} />`
                 : html`<${Outlet} />`}
             <//>
           </div>
