@@ -101,6 +101,12 @@ describe("matching", () => {
 		assert.equal(idMatch?.params.id, "7");
 	});
 
+	it("does not match a param route when its segment is missing", async () => {
+		const root = layout({}, [route("users", {}, [route(":id", {}, [index({})])])]);
+		const router = await makeRouter(root, "/users");
+		assert.equal(router.getSnapshot().match, null);
+	});
+
 	it("tries children in order and stops at first match", async () => {
 		const root = layout({}, [route("a", {}, [index({})]), route("b", {}, [index({})])]);
 		const router = await makeRouter(root, "/b");
@@ -158,6 +164,26 @@ describe("loaders", () => {
 		router.push("/about");
 		await waitIdle(router);
 		assert.equal(callCount, 1);
+	});
+
+	it("does not serve cached data when repeated search params change", async () => {
+		const root = layout({}, [
+			route("about", {}, [
+				index({ loader: async ({ searchParams }) => searchParams.getAll("tag") })
+			])
+		]);
+		const router = await makeRouter(root, "/about");
+
+		router.push("/about", new URLSearchParams("tag=a&tag=b"));
+		await waitIdle(router);
+
+		// Under the old cache key, ?tag=a&tag=b and ?tag=b collapsed to the same
+		// entry, so this navigation would serve the stale ["a", "b"] data.
+		router.push("/about", new URLSearchParams("tag=b"));
+		await waitIdle(router);
+
+		const data = router.getSnapshot().match?.children[0].children[0].loaderData;
+		assert.deepEqual(data, ["b"]);
 	});
 
 	it("stores a loader error in state and clears the match", async () => {

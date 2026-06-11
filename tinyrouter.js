@@ -81,11 +81,10 @@ function isLazy(value) {
  * @returns {string}
  */
 function cacheKey(node, searchParams) {
-	return JSON.stringify({
-		path: node.route.path,
-		params: node.params,
-		search: Object.fromEntries(searchParams)
-	});
+	// The cache itself is keyed by RouteNode identity, so the key only needs to
+	// capture params and search. Serializing searchParams directly (rather than
+	// via Object.fromEntries) preserves repeated keys like ?tag=a&tag=b.
+	return JSON.stringify(node.params) + "?" + searchParams;
 }
 
 export class TinyRouter {
@@ -341,6 +340,7 @@ export class TinyRouter {
 		}
 
 		if (node.type === "route") {
+			if (segments.length === 0) return null;
 			const [segment, ...rest] = segments;
 			if (!node.path) return null;
 
