@@ -4,6 +4,8 @@ import { h, createContext, Component } from "preact";
 /** @typedef {import("../tinyrouter.js").TinyRouter} TinyRouter */
 /** @typedef {import("preact").ComponentChildren} ComponentChildren */
 
+/** @typedef {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }>} RouteComponentType */
+
 /**
  * @typedef {object} RouterProps
  * @property {TinyRouter} router
@@ -27,6 +29,26 @@ const MatchContext = /** @type {import("preact").Context<MatchNode | null>} */ (
 export const RouterContext = /** @type {import("preact").Context<TinyRouter | null>} */ (
 	createContext(null)
 );
+
+/**
+ * Renders a match node's component, providing the node as context for nested <Outlet>s.
+ * Component-less nodes (pass-through layouts) defer to their first child.
+ *
+ * @param {MatchNode | null | undefined} node
+ * @returns {ComponentChildren}
+ */
+function renderMatch(node) {
+	if (!node) return null;
+	const C = /** @type {RouteComponentType | undefined} */ (
+		/** @type {unknown} */ (node.route.meta.component)
+	);
+	if (!C) return renderMatch(node.children[0]);
+	return h(
+		MatchContext.Provider,
+		{ value: node },
+		h(C, { params: node.params, data: node.loaderData })
+	);
+}
 
 /** @extends {Component<RouterProps, RouterState>} */
 export class Router extends Component {
@@ -56,40 +78,15 @@ export class Router extends Component {
 		const { match, error } = this.state.router;
 		if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
 		if (!match) return null;
-		const C = /**
-		 * @type {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }>
-		 * 	| undefined}
-		 */ (match.route.meta["component"]);
-		const inner = C
-			? h(
-					MatchContext.Provider,
-					{ value: match },
-					h(C, { params: match.params, data: match.loaderData })
-				)
-			: h(Outlet, { node: match });
-		return h(RouterContext.Provider, { value: this.props.router }, inner);
+		return h(RouterContext.Provider, { value: this.props.router }, renderMatch(match));
 	}
 }
 
 /** @extends {Component<OutletProps>} */
 export class Outlet extends Component {
 	render() {
-		/** @type {MatchNode | null} */
 		const node = this.props.node ?? /** @type {MatchNode | null} */ (this.context);
-		if (!node || node.children.length === 0) return null;
-
-		const child = node.children[0];
-		const C = /**
-		 * @type {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }>
-		 * 	| undefined}
-		 */ (child.route.meta["component"]);
-		if (!C) return null;
-
-		return h(
-			MatchContext.Provider,
-			{ value: child },
-			h(C, { params: child.params, data: child.loaderData })
-		);
+		return renderMatch(node?.children[0]);
 	}
 }
 

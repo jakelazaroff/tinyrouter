@@ -39,7 +39,7 @@
  * @typedef {object} RouteNode
  * @property {"layout" | "route" | "index"} type
  * @property {string | null} path
- * @property {Record<string, unknown>} meta
+ * @property {RouteMeta<any, any>} meta
  * @property {RouteNode[]} children
  * @property {(_: Needs) => void} [_]
  */
@@ -125,14 +125,14 @@ export class TinyRouter {
 		if (typeof navigation !== "undefined") {
 			navigation.addEventListener("navigate", e => this.#onNavigate(e));
 		} else {
-			window.addEventListener("popstate", () => {
-				this.#navigate(
-					this.#strip(window.location.pathname),
-					new URLSearchParams(window.location.search)
-				);
-			});
+			window.addEventListener("popstate", () => this.#sync());
 		}
 
+		this.#sync();
+	}
+
+	/** Matches and resolves the browser's current location. */
+	#sync() {
 		this.#navigate(
 			this.#strip(window.location.pathname),
 			new URLSearchParams(window.location.search)
@@ -177,12 +177,8 @@ export class TinyRouter {
 	 * @param {URLSearchParams} [searchParams]
 	 */
 	href(pathname, searchParams) {
-		const path = this.#prefix
-			? pathname === "/"
-				? this.#prefix
-				: this.#prefix + pathname
-			: pathname;
-		const search = searchParams ? new URLSearchParams(searchParams).toString() : "";
+		const path = pathname === "/" ? this.#prefix || "/" : this.#prefix + pathname;
+		const search = searchParams?.toString();
 		return search ? `${path}?${search}` : path;
 	}
 
@@ -202,22 +198,25 @@ export class TinyRouter {
 
 	/** @param {string} pathname @param {URLSearchParams} [searchParams] */
 	push(pathname, searchParams = new URLSearchParams()) {
-		const url = this.href(pathname, searchParams);
-		if (typeof navigation !== "undefined") {
-			navigation.navigate(url);
-		} else {
-			window.history.pushState(null, "", url);
-			this.#navigate(pathname, searchParams);
-		}
+		this.#go(pathname, searchParams, false);
 	}
 
 	/** @param {string} pathname @param {URLSearchParams} [searchParams] */
 	replace(pathname, searchParams = new URLSearchParams()) {
+		this.#go(pathname, searchParams, true);
+	}
+
+	/**
+	 * @param {string} pathname
+	 * @param {URLSearchParams} searchParams
+	 * @param {boolean} replace
+	 */
+	#go(pathname, searchParams, replace) {
 		const url = this.href(pathname, searchParams);
 		if (typeof navigation !== "undefined") {
-			navigation.navigate(url, { history: "replace" });
+			navigation.navigate(url, { history: replace ? "replace" : "auto" });
 		} else {
-			window.history.replaceState(null, "", url);
+			window.history[replace ? "replaceState" : "pushState"](null, "", url);
 			this.#navigate(pathname, searchParams);
 		}
 	}
@@ -284,9 +283,9 @@ export class TinyRouter {
 	 * @returns {Promise<void>}
 	 */
 	async #resolveLazy(node) {
-		const c = node.route.meta["component"];
+		const c = node.route.meta.component;
 		if (isLazy(c)) {
-			node.route.meta["component"] = await c.load();
+			node.route.meta.component = await c.load();
 		}
 	}
 
@@ -296,8 +295,8 @@ export class TinyRouter {
 	 * @returns {Promise<void>}
 	 */
 	async #runLoader(node, searchParams) {
-		const loader = node.route.meta["loader"];
-		if (typeof loader !== "function") return;
+		const loader = node.route.meta.loader;
+		if (!loader) return;
 		const key = cacheKey(node, searchParams);
 		const cached = this.#loaderCache.get(node.route);
 		if (cached && cached.key === key) {
@@ -328,40 +327,27 @@ export class TinyRouter {
 	 * @returns {MatchNode | null}
 	 */
 	#matchNode(node, segments, params) {
-		if (node.type === "layout") {
-			const children = this.#matchChildren(node.children, segments, params);
-			if (!children) return null;
-			return { route: node, params, loaderData: undefined, children };
-		}
-
-		if (node.type === "index") {
-			if (segments.length !== 0) return null;
-			return { route: node, params, loaderData: undefined, children: [] };
-		}
+		// Each node type decides how much of the path it consumes (layouts: nothing,
+		// indexes: only match when nothing is left, routes: one segment), then the
+		// shared tail matches whatever remains against the node's children.
+		if (node.type === "index" && segments.length !== 0) return null;
 
 		if (node.type === "route") {
-			if (segments.length === 0) return null;
 			const [segment, ...rest] = segments;
-			if (!node.path) return null;
-
-			if (node.path.startsWith(":")) {
-				const key = node.path.slice(1);
-				const nextParams = { ...params, [key]: segment };
-				const children = this.#matchChildren(node.children, rest, nextParams);
-				if (!children) return null;
-				return { route: node, params: nextParams, loaderData: undefined, children };
-			}
-
-			if (node.path !== segment) return null;
-			const children = this.#matchChildren(node.children, rest, params);
-			if (!children) return null;
-			return { route: node, params, loaderData: undefined, children };
+			if (segment === undefined || !node.path) return null;
+			if (node.path.startsWith(":")) params = { ...params, [node.path.slice(1)]: segment };
+			else if (node.path !== segment) return null;
+			segments = rest;
 		}
 
-		return null;
+		const children = this.#matchChildren(node.children, segments, params);
+		return children && { route: node, params, loaderData: undefined, children };
 	}
 
 	/**
+	 * Siblings are tried in order and the first match wins, so a `:param` route listed before a
+	 * static sibling (e.g. `:id` before `new`) will shadow it.
+	 *
 	 * @param {RouteNode[]} nodes
 	 * @param {string[]} segments
 	 * @param {Record<string, string>} params
@@ -390,6 +376,19 @@ export function createRouter(root, options) {
 }
 
 /**
+ * Internal untyped constructor; the builders below layer the param-inference types on top.
+ *
+ * @param {RouteNode["type"]} type
+ * @param {string | null} path
+ * @param {RouteNode["meta"]} meta
+ * @param {RouteNode<any>[]} children
+ * @returns {RouteNode<any>}
+ */
+function createNode(type, path, meta, children) {
+	return { type, path, meta, children };
+}
+
+/**
  * @template {Record<string, string>} [Inherited={}]
  * @template [D=unknown]
  * @param {RouteMeta<Inherited, D>} meta
@@ -397,9 +396,7 @@ export function createRouter(root, options) {
  * @returns {RouteNode<Inherited>}
  */
 export function layout(meta, children) {
-	return /** @type {RouteNode<Inherited>} */ (
-		/** @type {unknown} */ ({ type: "layout", path: null, meta, children })
-	);
+	return createNode("layout", null, meta, children);
 }
 
 /**
@@ -412,9 +409,7 @@ export function layout(meta, children) {
  * @returns {RouteNode<Inherited>}
  */
 export function route(path, meta, children) {
-	return /** @type {RouteNode<Inherited>} */ (
-		/** @type {unknown} */ ({ type: "route", path, meta, children })
-	);
+	return createNode("route", path, meta, children);
 }
 
 /**
@@ -424,7 +419,5 @@ export function route(path, meta, children) {
  * @returns {RouteNode<Inherited>}
  */
 export function index(meta) {
-	return /** @type {RouteNode<Inherited>} */ (
-		/** @type {unknown} */ ({ type: "index", path: null, meta, children: [] })
-	);
+	return createNode("index", null, meta, []);
 }
