@@ -1,16 +1,37 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { layout, route, index, lazy, TinyRouter } from "./tinyrouter.js";
+import TinyRouter, { layout, route, index, lazy } from "./tinyrouter.js";
 
 // --- helpers ---
 
-function mockWindow(pathname = "/") {
-	globalThis.window = {
-		location: { pathname, search: "" },
-		addEventListener: () => {},
-		history: { pushState() {}, replaceState() {} }
-	};
-	delete globalThis.navigation;
+/**
+ * Minimal stand-in for the browser's Navigation API. Dispatches intercept-able navigate events;
+ * currentEntry only advances when a handler intercepts, and navigate() returns whether it did, so
+ * tests can detect navigations the router let fall through.
+ */
+class FakeNavigation extends EventTarget {
+	constructor(url = "http://localhost/") {
+		super();
+		this.currentEntry = { url };
+	}
+
+	navigate(url) {
+		const destination = new URL(url, this.currentEntry.url);
+		let intercepted = false;
+		const event = Object.assign(new Event("navigate", { cancelable: true }), {
+			canIntercept: true,
+			hashChange: false,
+			downloadRequest: null,
+			destination: { url: destination.href },
+			intercept({ handler }) {
+				intercepted = true;
+				handler();
+			}
+		});
+		this.dispatchEvent(event);
+		if (intercepted) this.currentEntry = { url: destination.href };
+		return intercepted;
+	}
 }
 
 /** Resolves once the router reaches navigation: "idle". */
@@ -30,8 +51,8 @@ function waitIdle(router) {
 }
 
 async function makeRouter(root, pathname = "/", options = {}) {
-	mockWindow(pathname);
-	const router = new TinyRouter(root, options);
+	const navigation = new FakeNavigation("http://localhost" + pathname);
+	const router = new TinyRouter(root, { navigation, ...options });
 	await waitIdle(router);
 	return router;
 }
@@ -283,6 +304,27 @@ describe("href", () => {
 	it("appends serialised search params", async () => {
 		const router = await makeRouter(layout({}, [index({})]), "/");
 		assert.equal(router.href("/search", new URLSearchParams({ q: "hi" })), "/search?q=hi");
+	});
+});
+
+describe("navigation api", () => {
+	it("throws when the Navigation API is unavailable", () => {
+		assert.throws(() => new TinyRouter(layout({}, [index({})])), /Navigation API/);
+	});
+
+	it("does not intercept cross-origin navigations", async () => {
+		const navigation = new FakeNavigation();
+		const router = new TinyRouter(layout({}, [index({})]), { navigation });
+		await waitIdle(router);
+		assert.equal(navigation.navigate("http://elsewhere.example/"), false);
+	});
+
+	it("only intercepts navigations covered by the prefix", async () => {
+		const navigation = new FakeNavigation("http://localhost/app");
+		const router = new TinyRouter(layout({}, [index({})]), { navigation, prefix: "/app" });
+		await waitIdle(router);
+		assert.equal(navigation.navigate("/other"), false);
+		assert.equal(navigation.navigate("/app"), true);
 	});
 });
 

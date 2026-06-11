@@ -87,7 +87,7 @@ function cacheKey(node, searchParams) {
 	return JSON.stringify(node.params) + "?" + searchParams;
 }
 
-export class TinyRouter {
+export default class TinyRouter {
 	/** @type {RouterState} */
 	#state = { match: null, navigation: "idle", error: null };
 
@@ -111,39 +111,44 @@ export class TinyRouter {
 	/** @type {string} normalized: no trailing slash, "" when unset */
 	#prefix = "";
 
+	/** @type {Navigation} */
+	#navigation;
+
 	/**
 	 * @param {RouteNode<{}>} root
-	 * @param {{ prefix?: string }} [options]
+	 * @param {{ prefix?: string; navigation?: Navigation }} [options]
 	 */
 	constructor(root, options = {}) {
 		this.#root = root;
 		this.#prefix = (options.prefix ?? "").replace(/\/$/, "");
 
-		// Use the Navigation API as the single intercept point: plain <a href>
-		// clicks, programmatic push/replace, and back/forward all funnel through
-		// the navigate event. popstate is a fallback for environments without it.
-		if (typeof navigation !== "undefined") {
-			navigation.addEventListener("navigate", e => this.#onNavigate(e));
-		} else {
-			window.addEventListener("popstate", () => this.#sync());
-		}
+		this.#navigation = options.navigation ?? globalThis.navigation;
+		if (!this.#navigation) throw new Error("TinyRouter requires the Navigation API");
+
+		// The Navigation API is the single intercept point: plain <a href> clicks,
+		// programmatic push/replace, and back/forward all funnel through the
+		// navigate event.
+		this.#navigation.addEventListener("navigate", e => this.#onNavigate(e));
 
 		this.#sync();
 	}
 
-	/** Matches and resolves the browser's current location. */
+	/** @returns {URL} The current location, derived from the Navigation API */
+	#location() {
+		return new URL(/** @type {string} */ (this.#navigation.currentEntry?.url));
+	}
+
+	/** Matches and resolves the current location. */
 	#sync() {
-		this.#navigate(
-			this.#strip(window.location.pathname),
-			new URLSearchParams(window.location.search)
-		);
+		const url = this.#location();
+		this.#navigate(this.#strip(url.pathname), url.searchParams);
 	}
 
 	/** @param {NavigateEvent} e */
 	#onNavigate(e) {
 		if (!e.canIntercept || e.hashChange || e.downloadRequest !== null) return;
 		const url = new URL(e.destination.url);
-		if (url.origin !== window.location.origin) return;
+		if (url.origin !== this.#location().origin) return;
 		// Only intercept paths covered by our prefix; let the browser handle the rest.
 		if (
 			this.#prefix &&
@@ -212,13 +217,9 @@ export class TinyRouter {
 	 * @param {boolean} replace
 	 */
 	#go(pathname, searchParams, replace) {
-		const url = this.href(pathname, searchParams);
-		if (typeof navigation !== "undefined") {
-			navigation.navigate(url, { history: replace ? "replace" : "auto" });
-		} else {
-			window.history[replace ? "replaceState" : "pushState"](null, "", url);
-			this.#navigate(pathname, searchParams);
-		}
+		this.#navigation.navigate(this.href(pathname, searchParams), {
+			history: replace ? "replace" : "auto"
+		});
 	}
 
 	/**
@@ -364,15 +365,6 @@ export class TinyRouter {
 		}
 		return null;
 	}
-}
-
-/**
- * @param {RouteNode<any>} root
- * @param {{ prefix?: string }} [options]
- * @returns {TinyRouter}
- */
-export function createRouter(root, options) {
-	return new TinyRouter(root, options);
 }
 
 /**

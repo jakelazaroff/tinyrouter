@@ -1,7 +1,7 @@
 import { h, createContext, Component } from "preact";
 
 /** @typedef {import("../tinyrouter.js").MatchNode} MatchNode */
-/** @typedef {import("../tinyrouter.js").TinyRouter} TinyRouter */
+/** @typedef {import("../tinyrouter.js").default} TinyRouter */
 /** @typedef {import("preact").ComponentChildren} ComponentChildren */
 
 /** @typedef {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }>} RouteComponentType */

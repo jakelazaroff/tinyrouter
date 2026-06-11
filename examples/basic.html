@@ -37,7 +37,7 @@
     <main id="outlet"></main>
 
     <script type="module">
-      import { createRouter, layout, route, index } from "/tinyrouter.js";
+      import TinyRouter, { layout, route, index } from "/tinyrouter.js";
 
       // No framework here — `component` is just a function returning HTML.
       // Typed: route(":name", …) infers params: { name: string }.
@@ -55,7 +55,7 @@
 
       // The example is served at /examples/basic.html, so set that as the
       // prefix — internally the router still sees "/", "/about", etc.
-      const router = createRouter(tree, { prefix: window.location.pathname });
+      const router = new TinyRouter(tree, { prefix: window.location.pathname });
       const outlet = document.getElementById("outlet");
       const nav = document.getElementById("nav");
 

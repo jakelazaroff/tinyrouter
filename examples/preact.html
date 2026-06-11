@@ -40,7 +40,7 @@
     <script type="module">
       import { h, render } from "preact";
       import htm from "https://esm.sh/htm@3.1.1";
-      import { createRouter, layout, route, index } from "/tinyrouter.js";
+      import TinyRouter, { layout, route, index } from "/tinyrouter.js";
       import { Router, Outlet } from "/adapters/preact.js";
 
       const html = htm.bind(h);
@@ -96,7 +96,7 @@
       ]);
 
       // Treat the html file's own path as the routing root.
-      const router = createRouter(tree, { prefix: window.location.pathname });
+      const router = new TinyRouter(tree, { prefix: window.location.pathname });
       render(html`<${Router} router=${router} />`, document.getElementById("root"));
     </script>
   </body>

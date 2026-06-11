@@ -19,7 +19,7 @@
       import { h, render, createContext } from "https://esm.sh/preact@10.23.2";
       import { useContext, useEffect, useState } from "https://esm.sh/preact@10.23.2/hooks";
       import htm from "https://esm.sh/htm@3.1.1";
-      import { createRouter, layout, route, index, lazy } from "/tinyrouter.js";
+      import TinyRouter, { layout, route, index, lazy } from "/tinyrouter.js";
 
       const html = htm.bind(h);
 
@@ -147,7 +147,7 @@
         ]),
       ]);
 
-      const router = createRouter(tree, { prefix: window.location.pathname });
+      const router = new TinyRouter(tree, { prefix: window.location.pathname });
       render(html`<${Router} router=${router} />`, document.getElementById("root"));
     </script>
   </body>
