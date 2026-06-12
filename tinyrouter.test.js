@@ -11,15 +11,20 @@ import TinyRouter, { layout, route, index, lazy } from "./tinyrouter.js";
 /**
  * Minimal stand-in for the browser's Navigation API. Dispatches intercept-able navigate events;
  * currentEntry only advances when a handler intercepts, and navigate() returns whether it did, so
- * tests can detect navigations the router let fall through.
+ * tests can detect navigations the router let fall through. Like the real API, each event carries a
+ * signal that aborts when a later navigation supersedes it (or via cancel(), standing in for the
+ * browser canceling the navigation itself).
  */
 class FakeNavigation extends EventTarget {
 	constructor(url = "http://localhost/") {
 		super();
 		this.currentEntry = { url };
+		this.controller = null;
 	}
 
 	navigate(url) {
+		this.controller?.abort();
+		this.controller = new AbortController();
 		const destination = new URL(url, this.currentEntry.url);
 		let intercepted = false;
 		const event = Object.assign(new Event("navigate", { cancelable: true }), {
@@ -27,6 +32,7 @@ class FakeNavigation extends EventTarget {
 			hashChange: false,
 			downloadRequest: null,
 			destination: { url: destination.href },
+			signal: this.controller.signal,
 			intercept({ handler }) {
 				intercepted = true;
 				handler();
@@ -35,6 +41,10 @@ class FakeNavigation extends EventTarget {
 		this.dispatchEvent(event);
 		if (intercepted) this.currentEntry = { url: destination.href };
 		return intercepted;
+	}
+
+	cancel() {
+		this.controller?.abort();
 	}
 }
 
@@ -670,6 +680,119 @@ describe("subscribable loader data", () => {
 		router.subscribe(() => notified++);
 		store.emit();
 		assert.equal(notified, 1);
+	});
+});
+
+describe("cancellation", () => {
+	/** A promise with its resolve/reject exposed, for holding a loader open mid-test. */
+	function deferred() {
+		let resolve, reject;
+		const promise = new Promise((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	}
+
+	it("passes an AbortSignal to loaders", async () => {
+		let received;
+		const root = layout({}, [
+			index({
+				loader: args => {
+					received = args.signal;
+				}
+			})
+		]);
+		await makeRouter(root, "/");
+		assert.ok(received instanceof AbortSignal);
+	});
+
+	it("aborts the loader signal when a new navigation supersedes it", async () => {
+		const gate = deferred();
+		let captured;
+		const root = layout({}, [
+			index({}),
+			route("slow", {}, [
+				index({
+					loader: ({ signal }) => {
+						captured = signal;
+						return gate.promise;
+					}
+				})
+			]),
+			route("fast", {}, [index({})])
+		]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/slow");
+		assert.equal(captured.aborted, false);
+
+		router.push("/fast");
+		assert.equal(captured.aborted, true);
+
+		// The stale loader finishing late must not disturb the committed navigation.
+		gate.resolve("late");
+		await waitIdle(router);
+		await new Promise(r => setTimeout(r, 0));
+		assert.equal(router.getSnapshot().match?.children[0].route.path, "fast");
+		assert.equal(router.getSnapshot().navigation, "idle");
+	});
+
+	it("dispose aborts the in-flight navigation and never subscribes its data", async () => {
+		const gate = deferred();
+		let captured;
+		const store = {
+			subscribed: 0,
+			subscribe() {
+				this.subscribed++;
+				return () => {};
+			}
+		};
+		const root = layout({}, [
+			index({}),
+			route("slow", {}, [
+				index({
+					loader: ({ signal }) => {
+						captured = signal;
+						return gate.promise;
+					}
+				})
+			])
+		]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/slow");
+		router.dispose();
+		assert.equal(captured.aborted, true);
+
+		// The loader resolving a subscribable after dispose must not subscribe it —
+		// nothing would ever unsubscribe.
+		gate.resolve(store);
+		await new Promise(r => setTimeout(r, 0));
+		assert.equal(store.subscribed, 0);
+	});
+
+	it("keeps the current view when the browser cancels a navigation", async () => {
+		const gate = deferred();
+		const root = layout({}, [
+			index({}),
+			route("slow", {}, [index({ loader: () => gate.promise })])
+		]);
+		const navigation = new FakeNavigation("http://localhost/");
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		const before = router.getSnapshot().match;
+
+		router.push("/slow");
+		navigation.cancel();
+		// A loader that honors the signal rejects once it aborts.
+		gate.reject(new DOMException("aborted", "AbortError"));
+		await waitIdle(router);
+
+		const { match, navigation: status, error } = router.getSnapshot();
+		assert.equal(match, before);
+		assert.equal(status, "idle");
+		assert.equal(error, null);
 	});
 });
 

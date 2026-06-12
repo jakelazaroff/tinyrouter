@@ -12,7 +12,11 @@
  *
  * @template {Record<string, string>} P
  * @template D
- * @typedef {(args: { params: P; searchParams: URLSearchParams }) => D | Promise<D>} Loader
+ * @typedef {(args: {
+ * 	params: P;
+ * 	searchParams: URLSearchParams;
+ * 	signal: AbortSignal;
+ * }) => D | Promise<D>} Loader
  */
 
 /**
@@ -116,6 +120,8 @@ export default class TinyRouter {
 	/** @type {number} */
 	#navigationId = 0;
 
+	#abort = new AbortController();
+
 	/**
 	 * Unsubscribe functions for subscribable loader data in the current match tree. Replaced
 	 * wholesale when a navigation commits so abandoned routes stop notifying.
@@ -176,11 +182,13 @@ export default class TinyRouter {
 		)
 			return;
 		e.intercept({
-			handler: () => this.#navigate(this.#strip(url.pathname), url.searchParams)
+			handler: () => this.#navigate(this.#strip(url.pathname), url.searchParams, e.signal)
 		});
 	}
 
 	dispose() {
+		this.#navigationId++;
+		this.#abort?.abort();
 		this.#navigation.removeEventListener("navigate", this.#onNavigate);
 		this.#unsubscribeAll();
 		this.#listeners.clear();
@@ -257,7 +265,9 @@ export default class TinyRouter {
 		const url = new URL(pathname, this.#location());
 		if (arguments.length > 1) url.search = searchParams.toString();
 		const matched = this.#match(this.#strip(url.pathname));
-		if (matched) await this.#resolve(matched, url.searchParams);
+
+		// a preload isn't tied to a navigation, so nothing ever aborts its signal
+		if (matched) await this.#resolve(matched, url.searchParams, new AbortController().signal);
 	}
 
 	/** Re-matches and re-runs all loaders for the current URL. */
@@ -268,9 +278,14 @@ export default class TinyRouter {
 	/**
 	 * @param {string} pathname
 	 * @param {URLSearchParams} searchParams
+	 * @param {AbortSignal} [signal]
 	 */
-	async #navigate(pathname, searchParams) {
+	async #navigate(pathname, searchParams, signal) {
 		const id = ++this.#navigationId;
+
+		this.#abort?.abort();
+		this.#abort = new AbortController();
+		signal = signal ? AbortSignal.any([signal, this.#abort.signal]) : this.#abort.signal;
 
 		const matched = this.#match(pathname);
 
@@ -279,9 +294,14 @@ export default class TinyRouter {
 			this.#notify();
 
 			try {
-				await this.#resolve(matched, searchParams);
+				await this.#resolve(matched, searchParams, signal);
 			} catch (error) {
 				if (id !== this.#navigationId) return;
+				if (signal.aborted) {
+					this.#state = { ...this.#state, navigation: "idle" };
+					this.#notify();
+					return;
+				}
 				this.#unsubscribeAll();
 				this.#state = { match: null, navigation: "idle", error };
 				this.#notify();
@@ -290,6 +310,11 @@ export default class TinyRouter {
 		}
 
 		if (id !== this.#navigationId) return;
+		if (signal.aborted) {
+			this.#state = { ...this.#state, navigation: "idle" };
+			this.#notify();
+			return;
+		}
 
 		this.#unsubscribeAll();
 		this.#state = { match: matched, navigation: "idle", error: null };
@@ -302,12 +327,13 @@ export default class TinyRouter {
 	 *
 	 * @param {MatchNode} node
 	 * @param {URLSearchParams} searchParams
+	 * @param {AbortSignal} signal
 	 */
-	async #resolve(node, searchParams) {
+	async #resolve(node, searchParams, signal) {
 		await Promise.all([
 			this.#resolveLazy(node),
-			this.#runLoader(node, searchParams),
-			...node.children.map(child => this.#resolve(child, searchParams))
+			this.#runLoader(node, searchParams, signal),
+			...node.children.map(child => this.#resolve(child, searchParams, signal))
 		]);
 	}
 
@@ -323,13 +349,14 @@ export default class TinyRouter {
 	/**
 	 * @param {MatchNode} node
 	 * @param {URLSearchParams} searchParams
+	 * @param {AbortSignal} signal
 	 * @returns {Promise<void>}
 	 */
-	async #runLoader(node, searchParams) {
+	async #runLoader(node, searchParams, signal) {
 		const loader = node.route.meta.loader;
 		if (!loader) return;
 
-		node.data = await loader({ params: node.params, searchParams });
+		node.data = await loader({ params: node.params, searchParams, signal });
 	}
 
 	/**
