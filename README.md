@@ -6,69 +6,15 @@ tinyrouter is a tiny framework-agnostic client-side router in a single file vani
 
 tinyrouter is meant to be [vendored](https://htmx.org/essays/vendoring/); simply copy and paste `tinyrouter.js` into your project!
 
-## Quick start
-
-Routes are a tree built from four functions:
-
-- `layout()` wraps children without consuming any of the path
-- `route()` matches one segment (`":name"` segments become params)
-- `index()` matches when the path is exhausted
-- `splat()` matches whatever is left, captured in `params["*"]`.
-
-This example uses the Preact adapter from `adapters/preact.js`, which gives you two components: `<Router>` subscribes to the router and renders the match tree, and `<Outlet>` renders the next matched child inside a layout. Route components receive `params` and `data` (the loader result) as props.
-
-```jsx
-import { render } from "preact";
-import TinyRouter, { layout, route, index } from "./tinyrouter.js";
-import { Router, Outlet } from "./adapters/preact.js";
-
-function Shell() {
-	return (
-		<div>
-			<nav>
-				<a href="/">Home</a>
-				<a href="/posts/hello">First post</a>
-			</nav>
-			<Outlet />
-		</div>
-	);
-}
-
-function Post({ params, data }) {
-	return (
-		<article>
-			<h3>{params.slug}</h3>
-			<p>{data.body}</p>
-		</article>
-	);
-}
-
-const routes = layout({ component: Shell }, [
-	index({ component: () => <p>Welcome.</p> }),
-	route("posts", {}, [
-		route(":slug", {
-			component: Post,
-			loader: ({ params, signal }) =>
-				fetch(`/api/posts/${params.slug}`, { signal }).then(r => r.json())
-		})
-	])
-]);
-
-const router = new TinyRouter(routes);
-render(<Router router={router} />, document.getElementById("app"));
-```
-
-Those are plain `<a href>` links inside `Shell` — no `Link` component and no click handlers. The router intercepts them (along with back/forward and programmatic navigations) through the Navigation API, which it requires. For programmatic navigation there's `router.push("/posts/hello")` and `router.replace(...)`.
-
-If a loader throws, `<Router>` renders its optional `fallback={error => ...}` prop instead of the tree. To reach the router from a component (for `push`, `href`, `preload`), consume the exported `RouterContext` — `useContext(RouterContext)` in a function component, or `static contextType = RouterContext` in a class.
-
-tinyrouter itself is framework-agnostic: the core has no rendering and exposes everything adapters need through `subscribe()`, `getSnapshot()`, and the match tree. To use it without a framework, see [`examples/basic.html`](examples/basic.html), which renders the match tree by hand.
-
-Runnable, build-free versions of these examples are in [`examples/`](examples/) — serve the repo root (`npx serve`) and open [`examples/preact.html`](examples/preact.html) or [`examples/basic.html`](examples/basic.html).
-
 ## Defining routes
 
-A route tree is built from three node types.
+A route tree is built from four node types, created as the first argument to `TinyRouter`:
+
+```js
+import TinyRouter, { route } from "./tinyrouter.js";
+
+const router = new TinyRouter(route("home", { component: Home }));
+```
 
 ### Routes
 
@@ -187,28 +133,101 @@ route(":slug", {
 
 ## Navigating
 
-- It's just links: <a href> is intercepted automatically
-- push() / replace() for programmatic navigation
-- href() for building URLs (matters under `prefix`)
-- The `prefix` option for apps mounted under a subpath
+tinyrouter doesn't use any special link components for navigation; `<a href>` is intercepted automatically using the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API).
+
+If your router is mounted under a subpath, you can use `.href()` to get a prefixed route path:
+
+```js
+const router = new TinyRouter(routes, { prefix: "/foo" });
+
+html` <a href=${router.href("/profile")}>Profile</a> `;
+```
+
+To navigate programmatically, you can use `.push()` and `.replace()`:
+
+```js
+router.push("/posts/hello");
+router.replace("/login");
+router.push("/search", new URLSearchParams({ q: "routing" }));
+```
 
 ## Loaders and data
 
-- Loader contract: runs on _every_ navigation, receives
-  { params, searchParams, signal }
-- No cache, on purpose: freshness belongs to the data layer
-  (HTTP cache, query library); preload() warms whatever
-  cache
-  the loader uses
-- Subscribable results: return anything with subscribe(cb)
-  → unsub
-  and the router re-renders on emit while the route is
-  matched
-- AbortSignal: aborts on supersession/dispose — pass it to
-  fetch
-- reload() as the manual revalidation escape hatch
-- Error handling: a throwing loader puts the error on state
-- Point at examples/loaders.html
+A route can declare a `loader` alongside its component. It receives `{ params, searchParams, signal }`, and whatever it returns (or resolves to) becomes the match node's `data` — adapters pass it to the component as the `data` prop:
+
+```js
+import { route } from "./tinyrouter.js";
+
+route(":id", {
+	component: Person,
+	loader: ({ params, searchParams, signal }) =>
+		fetch(`/api/people/${params.id}`, { signal }).then(r => r.json())
+});
+```
+
+Loaders run on _every_ navigation to their route. When a navigation matches several nested routes, their loaders run in parallel.
+
+The `signal` aborts a loader when a newer navigation supersedes it or when the router is disposed; pass it to `fetch` so abandoned requests are cancelled.
+
+### Subscribable data
+
+If a loader returns anything with a Svelte-store-style `subscribe(callback)` that returns an unsubscribe function, the router subscribes while the route stays matched and re-renders on every emit:
+
+```js
+import { route } from "./tinyrouter.js";
+
+// a minimal subscribable: emits every second
+class Ticker {
+	count = 0;
+	#listeners = new Set();
+
+	constructor() {
+		setInterval(() => {
+			this.count++;
+			for (const fn of this.#listeners) fn();
+		}, 1000);
+	}
+
+	subscribe(fn) {
+		this.#listeners.add(fn);
+		return () => this.#listeners.delete(fn);
+	}
+}
+
+route("live", {
+	loader: () => new Ticker(),
+	component: ({ data }) => `<p>${data.count}s on this page</p>`
+});
+```
+
+The callback takes no arguments — it just signals "something changed", and components read the current value off `data`. When a navigation moves away from the route, the router unsubscribes.
+
+### Reloading
+
+To re-run the loaders for the current URL by hand, use `.reload()`:
+
+```js
+await deletePost(id);
+router.reload();
+```
+
+### Error handling
+
+If a loader throws or rejects, the navigation fails and the error lands on router state: `{ match: null, navigation: "idle", error }`. The Preact adapter's `<Router>` renders its `fallback={error => ...}` prop in that case. The error clears on the next successful navigation.
+
+## Preloading
+
+To preload a route, you can use `.preload()`:
+
+```js
+// warm up "/posts/hello" when the link is hovered
+const link = document.querySelector("a[href='/posts/hello']");
+link.addEventListener("pointerenter", () => router.preload("/posts/hello"));
+```
+
+Preloading both runs loaders _and_ fetches any lazy-loaded components for matched route segments.
+
+Note that there is no cache for loader data, so the loader will run again on actual navigation. To take full advantage of preloading, loaders should use a caching strategy — either the browser's built-in cache or some sort of query library.
 
 ## Router state
 
@@ -217,29 +236,3 @@ route(":slug", {
   contract
   (works with useSyncExternalStore)
 - The match tree (MatchNode) for anyone introspecting
-
-## Preact adapter
-
-- <Router router={...} fallback={...}> and <Outlet>
-- Components receive { params, data } as props — no
-  useParams/
-  useLoaderData equivalents needed
-- RouterContext is the public API for reaching the router:
-  useContext(RouterContext) or static contextType =
-  RouterContext
-- Recipe: a loading indicator (subscribe to navigation
-  status) —
-  the one pattern that needs real plumbing
-- Point at examples/preact.html
-
-## Lifecycle
-
-- dispose(): removes listeners, aborts in-flight loads,
-  unsubscribes
-
-## Non-goals / design notes
-
-- No Link component, no data cache, no route ranking
-  (first match wins),
-  no history-API fallback — and the one-sentence reason for
-  each
