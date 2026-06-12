@@ -157,6 +157,11 @@ describe("route builders", () => {
 		assert.equal(node.path, null);
 	});
 
+	it("route() and layout() default children to an empty array", () => {
+		assert.deepEqual(route("about", {}).children, []);
+		assert.deepEqual(layout({}).children, []);
+	});
+
 	it("lazy() stores the load function", () => {
 		const load = async () => () => null;
 		const wrapped = lazy(load);
@@ -175,6 +180,12 @@ describe("matching", () => {
 		const root = layout({}, [index({})]);
 		const router = await makeRouter(root, "/missing");
 		assert.equal(router.getSnapshot().match, null);
+	});
+
+	it("matches a leaf route created without children", async () => {
+		const root = layout({}, [route("about", { component: () => "about" })]);
+		const router = await makeRouter(root, "/about");
+		assert.equal(router.getSnapshot().match?.children[0].route.path, "about");
 	});
 
 	it("matches a static route segment", async () => {

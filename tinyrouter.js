@@ -451,10 +451,10 @@ function createNode(type, path, meta, children) {
  * @template {Record<string, string>} [Inherited={}]
  * @template [D=unknown]
  * @param {RouteMeta<Inherited, D>} meta
- * @param {RouteNode<Inherited>[]} children
+ * @param {RouteNode<Inherited>[]} [children]
  * @returns {RouteNode<Inherited>}
  */
-export function layout(meta, children) {
+export function layout(meta, children = []) {
 	return createNode("layout", null, meta, children);
 }
 
@@ -464,10 +464,10 @@ export function layout(meta, children) {
  * @template [D=unknown]
  * @param {P} path
  * @param {RouteMeta<Inherited & ExtractParams<P>, D>} meta
- * @param {RouteNode<Inherited & ExtractParams<P>>[]} children
+ * @param {RouteNode<Inherited & ExtractParams<P>>[]} [children]
  * @returns {RouteNode<Inherited>}
  */
-export function route(path, meta, children) {
+export function route(path, meta, children = []) {
 	return createNode("route", path, meta, children);
 }
 
