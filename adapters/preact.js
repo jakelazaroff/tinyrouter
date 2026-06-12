@@ -17,11 +17,6 @@ import { h, createContext, Component } from "preact";
  * @property {import("../tinyrouter.js").RouterState} router
  */
 
-/**
- * @typedef {object} OutletProps
- * @property {MatchNode} [node]
- */
-
 const MatchContext = /** @type {import("preact").Context<MatchNode | null>} */ (
 	createContext(null)
 );
@@ -89,12 +84,11 @@ export class Router extends Component {
 	}
 }
 
-/** @extends {Component<OutletProps>} */
 export class Outlet extends Component {
+	/** @override */
+	static contextType = MatchContext;
+
 	render() {
-		const node = this.props.node ?? /** @type {MatchNode | null} */ (this.context);
-		return renderMatch(node?.children[0]);
+		return renderMatch(this.context.children[0]);
 	}
 }
-
-Outlet.contextType = MatchContext;

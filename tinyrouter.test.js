@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import TinyRouter, { layout, route, index, lazy } from "./tinyrouter.js";
+import TinyRouter, { layout, route, index, splat, lazy } from "./tinyrouter.js";
 
 // --- helpers ---
 
@@ -162,6 +162,13 @@ describe("route builders", () => {
 		assert.deepEqual(layout({}).children, []);
 	});
 
+	it("splat() creates a splat node with no children", () => {
+		const node = splat({});
+		assert.equal(node.type, "splat");
+		assert.equal(node.path, null);
+		assert.deepEqual(node.children, []);
+	});
+
 	it("lazy() stores the load function", () => {
 		const load = async () => () => null;
 		const wrapped = lazy(load);
@@ -235,6 +242,44 @@ describe("matching", () => {
 		const root = layout({}, [route("a", {}, [index({})]), route("b", {}, [index({})])]);
 		const router = await makeRouter(root, "/b");
 		assert.equal(router.getSnapshot().match?.children[0].route.path, "b");
+	});
+
+	it("splat captures the remaining segments into params['*']", async () => {
+		const root = layout({}, [route("docs", {}, [splat({})])]);
+		const router = await makeRouter(root, "/docs/guides/routing/nested");
+		const splatMatch = router.getSnapshot().match?.children[0].children[0];
+		assert.equal(splatMatch?.params["*"], "guides/routing/nested");
+	});
+
+	it("splat matches zero segments", async () => {
+		const root = layout({}, [route("docs", {}, [splat({})])]);
+		const router = await makeRouter(root, "/docs");
+		const splatMatch = router.getSnapshot().match?.children[0].children[0];
+		assert.equal(splatMatch?.params["*"], "");
+	});
+
+	it("splat decodes captured segments", async () => {
+		const root = layout({}, [splat({})]);
+		const router = await makeRouter(root, "/Ada%20Lovelace/caf%C3%A9");
+		assert.equal(router.getSnapshot().match?.children[0].params["*"], "Ada Lovelace/café");
+	});
+
+	it("splat acts as a catch-all after unmatched siblings", async () => {
+		const root = layout({}, [
+			index({}),
+			route("about", {}, [index({})]),
+			splat({ component: () => "not found" })
+		]);
+		const router = await makeRouter(root, "/no/such/page");
+		const match = router.getSnapshot().match;
+		assert.equal(match?.children[0].route.type, "splat");
+		assert.equal(match?.children[0].params["*"], "no/such/page");
+	});
+
+	it("earlier siblings win over a splat", async () => {
+		const root = layout({}, [route("about", {}, [index({})]), splat({})]);
+		const router = await makeRouter(root, "/about");
+		assert.equal(router.getSnapshot().match?.children[0].route.path, "about");
 	});
 });
 

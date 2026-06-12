@@ -44,7 +44,7 @@
  *
  * @template {Record<string, string>} [Needs={}]
  * @typedef {object} RouteNode
- * @property {"layout" | "route" | "index"} type
+ * @property {"layout" | "route" | "index" | "splat"} type
  * @property {string | null} path
  * @property {RouteMeta<any, any>} meta
  * @property {RouteNode[]} children
@@ -399,9 +399,15 @@ export default class TinyRouter {
 	 */
 	#matchNode(node, segments, params) {
 		// Each node type decides how much of the path it consumes (layouts: nothing,
-		// indexes: only match when nothing is left, routes: one segment), then the
-		// shared tail matches whatever remains against the node's children.
+		// indexes: only match when nothing is left, routes: one segment, splats:
+		// everything left), then the shared tail matches whatever remains against
+		// the node's children.
 		if (node.type === "index" && segments.length !== 0) return null;
+
+		if (node.type === "splat") {
+			params = { ...params, "*": segments.join("/") };
+			segments = [];
+		}
 
 		if (node.type === "route") {
 			const [segment, ...rest] = segments;
@@ -479,4 +485,18 @@ export function route(path, meta, children = []) {
  */
 export function index(meta) {
 	return createNode("index", null, meta, []);
+}
+
+/**
+ * Matches the rest of the path — zero or more segments — and captures it (decoded, joined with "/")
+ * into `params["*"]`. Because children are tried in order, place a splat after its siblings to use
+ * it as a catch-all.
+ *
+ * @template {Record<string, string>} [Inherited={}]
+ * @template [D=unknown]
+ * @param {RouteMeta<Inherited & { "*": string }, D>} meta
+ * @returns {RouteNode<Inherited>}
+ */
+export function splat(meta) {
+	return createNode("splat", null, meta, []);
 }

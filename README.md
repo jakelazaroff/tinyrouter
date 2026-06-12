@@ -8,11 +8,12 @@ tinyrouter is meant to be [vendored](https://htmx.org/essays/vendoring/); simply
 
 ## Quick start
 
-Routes are a tree built from three functions:
+Routes are a tree built from four functions:
 
 - `layout()` wraps children without consuming any of the path
 - `route()` matches one segment (`":name"` segments become params)
-- `index()` matches when the path is exhausted.
+- `index()` matches when the path is exhausted
+- `splat()` matches whatever is left, captured in `params["*"]`.
 
 This example uses the Preact adapter from `adapters/preact.js`, which gives you two components: `<Router>` subscribes to the router and renders the match tree, and `<Outlet>` renders the next matched child inside a layout. Route components receive `params` and `data` (the loader result) as props.
 
@@ -148,6 +149,30 @@ route(":org", {}, [
 ]);
 ```
 
+### Catch-all routes
+
+A `splat` matches the rest of the path — zero or more segments — and captures it (decoded, joined with `/`) into `params["*"]`:
+
+```js
+import { route, splat } from "./tinyrouter.js";
+
+// matches "/docs", "/docs/guides", "/docs/guides/routing", …
+route("docs", {}, [splat({ component: ({ params }) => `<p>${params["*"]}</p>` })]);
+```
+
+Because children are tried in order, a splat placed after its siblings makes a natural not-found route that keeps its ancestors' layouts rendered:
+
+```js
+import { layout, index, route, splat } from "./tinyrouter.js";
+
+layout({ component: Shell }, [
+	index({ component: Home }),
+	route("about", { component: About }),
+	// any other path, still wrapped in Shell
+	splat({ component: NotFound })
+]);
+```
+
 ### Lazy loading
 
 To load a route's code only when it's visited, wrap its component in `lazy`, passing a function that returns a promise for the component:
@@ -214,7 +239,7 @@ route(":slug", {
 
 ## Non-goals / design notes
 
-- No Link component, no data cache, no nested URL
-  ranking/wildcards,
+- No Link component, no data cache, no route ranking
+  (first match wins),
   no history-API fallback — and the one-sentence reason for
   each
