@@ -388,6 +388,68 @@ describe("push and replace", () => {
 	});
 });
 
+describe("location", () => {
+	it("exposes pathname and searchParams on the snapshot", async () => {
+		const root = layout({}, [route("about", {}, [index({})])]);
+		const router = await makeRouter(root, "/about?tag=a");
+		const { pathname, searchParams } = router.getSnapshot();
+		assert.equal(pathname, "/about");
+		assert.equal(searchParams.get("tag"), "a");
+	});
+
+	it("updates the location when a navigation commits", async () => {
+		const root = layout({}, [index({}), route("about", {}, [index({})])]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/about", new URLSearchParams({ tag: "b" }));
+		await waitIdle(router);
+
+		assert.equal(router.getSnapshot().pathname, "/about");
+		assert.equal(router.getSnapshot().searchParams.get("tag"), "b");
+	});
+
+	it("strips the prefix from pathname", async () => {
+		const root = layout({}, [route("about", {}, [index({})])]);
+		const router = await makeRouter(root, "/app/about", { prefix: "/app" });
+		assert.equal(router.getSnapshot().pathname, "/about");
+	});
+
+	it("keeps the committed location while a navigation is loading", async () => {
+		let release;
+		const gate = new Promise(resolve => (release = resolve));
+		const root = layout({}, [index({}), route("slow", {}, [index({ loader: () => gate })])]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/slow");
+		assert.equal(router.getSnapshot().navigation, "loading");
+		assert.equal(router.getSnapshot().pathname, "/");
+
+		release(null);
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().pathname, "/slow");
+	});
+
+	it("records the failed navigation's location alongside the error", async () => {
+		const root = layout({}, [
+			index({}),
+			route("broken", {}, [
+				index({
+					loader: async () => {
+						throw new Error("oops");
+					}
+				})
+			])
+		]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/broken");
+		await waitIdle(router);
+
+		assert.ok(router.getSnapshot().error);
+		assert.equal(router.getSnapshot().pathname, "/broken");
+	});
+});
+
 describe("subscribe", () => {
 	it("notifies listeners on navigation", async () => {
 		const root = layout({}, [index({})]);
@@ -853,6 +915,62 @@ describe("cancellation", () => {
 });
 
 describe("preact adapter", () => {
+	it("passes params, data and the navigation state to route components", async () => {
+		const { Router } = await importPreactAdapter();
+		const C = () => null;
+		const snapshot = {
+			match: { route: { meta: { component: C } }, params: { id: "1" }, data: "d", children: [] },
+			navigation: "idle",
+			error: null,
+			pathname: "/things/1",
+			searchParams: new URLSearchParams("q=hi")
+		};
+		const view = new Router({ router: { getSnapshot: () => snapshot, subscribe: () => () => {} } });
+
+		const tree = view.render();
+
+		// RouterContext.Provider → MatchContext.Provider → component
+		const leaf = tree.children[0].children[0];
+		assert.equal(leaf.type, C);
+		assert.equal(leaf.props.params.id, "1");
+		assert.equal(leaf.props.data, "d");
+		assert.equal(leaf.props.pathname, "/things/1");
+		assert.equal(leaf.props.searchParams.get("q"), "hi");
+		assert.equal(leaf.props.navigation, "idle");
+		assert.equal(leaf.props.error, null);
+	});
+
+	it("Outlet renders the next match with the same navigation state", async () => {
+		const { Outlet } = await importPreactAdapter();
+		const Child = () => null;
+		const child = {
+			route: { meta: { component: Child } },
+			params: { x: "1" },
+			data: 2,
+			children: []
+		};
+		const state = {
+			match: null,
+			navigation: "loading",
+			error: null,
+			pathname: "/a/b",
+			searchParams: new URLSearchParams()
+		};
+		const outlet = new Outlet({});
+		outlet.context = {
+			node: { route: { meta: {} }, params: {}, data: undefined, children: [child] },
+			state
+		};
+
+		const tree = outlet.render();
+
+		const leaf = tree.children[0];
+		assert.equal(leaf.type, Child);
+		assert.equal(leaf.props.params.x, "1");
+		assert.equal(leaf.props.pathname, "/a/b");
+		assert.equal(leaf.props.navigation, "loading");
+	});
+
 	it("resubscribes when the router prop changes", async () => {
 		const { Router } = await importPreactAdapter();
 		const first = makeAdapterRouter("first");

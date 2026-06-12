@@ -4,7 +4,17 @@ import { h, createContext, Component } from "preact";
 /** @typedef {import("../tinyrouter.js").default} TinyRouter */
 /** @typedef {import("preact").ComponentChildren} ComponentChildren */
 
-/** @typedef {import("preact").ComponentType<{ params: Record<string, string>; data: unknown }>} RouteComponentType */
+/** @typedef {import("../tinyrouter.js").RouterState} TinyRouterState */
+/**
+ * @typedef {import("preact").ComponentType<{
+ * 	params: Record<string, string>;
+ * 	data: unknown;
+ * 	pathname: string;
+ * 	searchParams: URLSearchParams;
+ * 	navigation: "idle" | "loading";
+ * 	error: unknown;
+ * }>} RouteComponentType
+ */
 
 /**
  * @typedef {object} RouterProps
@@ -17,9 +27,10 @@ import { h, createContext, Component } from "preact";
  * @property {import("../tinyrouter.js").RouterState} router
  */
 
-const MatchContext = /** @type {import("preact").Context<MatchNode | null>} */ (
-	createContext(null)
-);
+const MatchContext =
+	/** @type {import("preact").Context<{ node: MatchNode; state: TinyRouterState } | null>} */ (
+		createContext(null)
+	);
 
 export const RouterContext = /** @type {import("preact").Context<TinyRouter | null>} */ (
 	createContext(null)
@@ -30,15 +41,27 @@ export const RouterContext = /** @type {import("preact").Context<TinyRouter | nu
  * Component-less nodes (pass-through layouts) defer to their first child.
  *
  * @param {MatchNode | null | undefined} node
+ * @param {TinyRouterState} state
  * @returns {ComponentChildren}
  */
-function renderMatch(node) {
+function renderMatch(node, state) {
 	if (!node) return null;
 	const C = /** @type {RouteComponentType | undefined} */ (
 		/** @type {unknown} */ (node.route.meta.component)
 	);
-	if (!C) return renderMatch(node.children[0]);
-	return h(MatchContext.Provider, { value: node }, h(C, { params: node.params, data: node.data }));
+	if (!C) return renderMatch(node.children[0], state);
+	return h(
+		MatchContext.Provider,
+		{ value: { node, state } },
+		h(C, {
+			params: node.params,
+			data: node.data,
+			pathname: state.pathname,
+			searchParams: state.searchParams,
+			navigation: state.navigation,
+			error: state.error
+		})
+	);
 }
 
 /** @extends {Component<RouterProps, RouterState>} */
@@ -80,7 +103,11 @@ export class Router extends Component {
 		const { match, error } = this.state.router;
 		if (error) return this.props.fallback?.(error) ?? h("p", null, "Something went wrong");
 		if (!match) return null;
-		return h(RouterContext.Provider, { value: this.props.router }, renderMatch(match));
+		return h(
+			RouterContext.Provider,
+			{ value: this.props.router },
+			renderMatch(match, this.state.router)
+		);
 	}
 }
 
@@ -89,6 +116,7 @@ export class Outlet extends Component {
 	static contextType = MatchContext;
 
 	render() {
-		return renderMatch(this.context.children[0]);
+		const { node, state } = this.context;
+		return renderMatch(node.children[0], state);
 	}
 }

@@ -131,6 +131,28 @@ route(":slug", {
 });
 ```
 
+## Component props
+
+Adapters render every matched route component with the same props:
+
+- `params` — the accumulated path params, ancestors included
+- `data` — whatever the route's loader returned (see below)
+- `pathname` — the current router-relative pathname (prefix stripped)
+- `searchParams` — the current query string, as `URLSearchParams`
+- `navigation` — `"loading"` while a navigation is in flight, otherwise `"idle"`
+- `error` — the error from a failed navigation, otherwise `null`
+
+`pathname` and `searchParams` always describe the *committed* match: while a navigation is loading, the previous view stays rendered (with `navigation: "loading"`), and they update when the new match commits.
+
+```js
+route("search", {
+	component: ({ searchParams, navigation }) =>
+		navigation === "loading"
+			? `<p>Searching…</p>`
+			: `<p>Results for ${searchParams.get("q")}</p>`
+});
+```
+
 ## Navigating
 
 tinyrouter doesn't use any special link components for navigation; `<a href>` is intercepted automatically using the [Navigation API](https://developer.mozilla.org/en-US/docs/Web/API/Navigation_API).
@@ -231,7 +253,10 @@ Note that there is no cache for loader data, so the loader will run again on act
 
 ## Router state
 
-- RouterState shape: { match, navigation, error }
+- RouterState shape: { match, navigation, error, pathname, searchParams }
+- pathname/searchParams are the committed location — router-relative
+  (prefix stripped), updated only when a navigation commits, so they
+  always describe match
 - subscribe()/getSnapshot() — the framework-agnostic
   contract
   (works with useSyncExternalStore)

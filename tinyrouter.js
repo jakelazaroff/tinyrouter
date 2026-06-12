@@ -20,9 +20,19 @@
  */
 
 /**
+ * Route components receive their own params and loader data plus the shared navigation state, so a
+ * component can read the query string or show a loading indicator without reaching for the router.
+ *
  * @template {Record<string, string>} P
  * @template D
- * @typedef {(props: { params: P; data: D }) => unknown} RouteComponent
+ * @typedef {(props: {
+ * 	params: P;
+ * 	data: D;
+ * 	pathname: string;
+ * 	searchParams: URLSearchParams;
+ * 	navigation: "idle" | "loading";
+ * 	error: unknown;
+ * }) => unknown} RouteComponent
  */
 
 /**
@@ -60,10 +70,15 @@
  */
 
 /**
+ * `pathname` and `searchParams` are the committed location — router-relative (prefix stripped) and
+ * updated only when a navigation commits, so they always describe `match`.
+ *
  * @typedef {object} RouterState
  * @property {MatchNode | null} match
  * @property {"idle" | "loading"} navigation
  * @property {unknown} error
+ * @property {string} pathname
+ * @property {URLSearchParams} searchParams
  */
 
 const LAZY = Symbol("lazy");
@@ -109,7 +124,7 @@ function decodeSegment(segment) {
 
 export default class TinyRouter {
 	/** @type {RouterState} */
-	#state = { match: null, navigation: "idle", error: null };
+	#state;
 
 	/** @type {Set<() => void>} */
 	#listeners = new Set();
@@ -149,6 +164,15 @@ export default class TinyRouter {
 
 		this.#navigation = options.navigation ?? globalThis.navigation;
 		if (!this.#navigation) throw new Error("TinyRouter requires the Navigation API");
+
+		const url = this.#location();
+		this.#state = {
+			match: null,
+			navigation: "idle",
+			error: null,
+			pathname: this.#strip(url.pathname),
+			searchParams: url.searchParams
+		};
 
 		// The Navigation API is the single intercept point: plain <a href> clicks,
 		// programmatic push/replace, and back/forward all funnel through the
@@ -303,7 +327,7 @@ export default class TinyRouter {
 					return;
 				}
 				this.#unsubscribeAll();
-				this.#state = { match: null, navigation: "idle", error };
+				this.#state = { match: null, navigation: "idle", error, pathname, searchParams };
 				this.#notify();
 				return;
 			}
@@ -317,7 +341,7 @@ export default class TinyRouter {
 		}
 
 		this.#unsubscribeAll();
-		this.#state = { match: matched, navigation: "idle", error: null };
+		this.#state = { match: matched, navigation: "idle", error: null, pathname, searchParams };
 		if (matched) this.#watch(matched);
 		this.#notify();
 	}
