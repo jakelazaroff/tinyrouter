@@ -237,8 +237,10 @@ export default class TinyRouter {
 			!url.pathname.startsWith(this.#prefix + "/")
 		)
 			return;
+		const pathname = this.#strip(url.pathname);
+		if (!this.#match(pathname)) return;
 		e.intercept({
-			handler: () => this.#navigate(this.#strip(url.pathname), url.searchParams, e.signal)
+			handler: () => this.#navigate(pathname, url.searchParams, e.signal)
 		});
 	}
 

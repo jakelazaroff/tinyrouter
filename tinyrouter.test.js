@@ -541,12 +541,14 @@ describe("push and replace", () => {
 		assert.equal(router.getSnapshot().match?.children[0].route.path, "about");
 	});
 
-	it("navigating to an unmatched path yields null match", async () => {
+	it("navigating to an unmatched path is not intercepted", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
 		const root = layout({}, [index({})]);
-		const router = await makeRouter(root, "/");
-		router.push("/gone");
+		const router = new TinyRouter(root, { navigation });
 		await waitIdle(router);
-		assert.equal(router.getSnapshot().match, null);
+		const before = router.getSnapshot().match;
+		assert.equal(navigation.navigate("/gone"), false);
+		assert.equal(router.getSnapshot().match, before);
 	});
 });
 
