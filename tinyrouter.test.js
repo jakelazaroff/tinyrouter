@@ -22,7 +22,7 @@ class FakeNavigation extends EventTarget {
 		this.controller = null;
 	}
 
-	navigate(url) {
+	navigate(url, { formData } = {}) {
 		this.controller?.abort();
 		this.controller = new AbortController();
 		const destination = new URL(url, this.currentEntry.url);
@@ -31,6 +31,7 @@ class FakeNavigation extends EventTarget {
 			canIntercept: true,
 			hashChange: false,
 			downloadRequest: null,
+			formData: formData ?? null,
 			destination: { url: destination.href },
 			signal: this.controller.signal,
 			intercept({ handler }) {
@@ -466,6 +467,72 @@ describe("errors", () => {
 		await waitIdle(router);
 
 		assert.equal(router.getSnapshot().match?.children[0].error, null);
+	});
+});
+
+describe("actions", () => {
+	it("calls the action with formData on a POST navigation", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const root = layout({}, [index({}), route("contact", { action: ({ formData }) => formData.get("name") }, [index({})])]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		const fd = new FormData();
+		fd.append("name", "Ada");
+		navigation.navigate("/contact", { formData: fd });
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().match?.children[0].data, "Ada");
+	});
+
+	it("runs the loader on a GET navigation, not the action", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const root = layout({}, [index({}), route("search", { loader: ({ searchParams }) => searchParams.get("q"), action: () => "posted" }, [index({})])]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		navigation.navigate("/search?q=hello");
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().match?.children[0].data, "hello");
+	});
+
+	it("runs action on deepest matched node; ancestors run loaders", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		let ancestorRan = null;
+		const root = layout({
+			loader: () => { ancestorRan = "loader"; },
+			action: () => { ancestorRan = "action"; }
+		}, [route("submit", { action: ({ formData }) => formData.get("v") }, [index({})])]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		const fd = new FormData();
+		fd.append("v", "42");
+		navigation.navigate("/submit", { formData: fd });
+		await waitIdle(router);
+		assert.equal(ancestorRan, "loader");
+		assert.equal(router.getSnapshot().match?.children[0].data, "42");
+	});
+
+	it("action runs before loaders so loaders can depend on its result", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const order = [];
+		const root = layout({
+			loader: async () => { order.push("loader"); }
+		}, [route("submit", { action: async () => { order.push("action"); } }, [index({})])]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		navigation.navigate("/submit", { formData: new FormData() });
+		await waitIdle(router);
+		assert.deepEqual(order, ["action", "loader"]);
+	});
+
+	it("passes searchParams alongside formData to the action", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const root = layout({}, [index({}), route("submit", { action: ({ searchParams, formData }) => `${searchParams.get("ref")}-${formData.get("v")}` }, [index({})])]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		const fd = new FormData();
+		fd.append("v", "42");
+		navigation.navigate("/submit?ref=home", { formData: fd });
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().match?.children[0].data, "home-42");
 	});
 });
 

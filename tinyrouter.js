@@ -6,9 +6,8 @@
  */
 
 /**
- * Runs on every navigation to its route — the router never caches results. If the resolved value is
- * a Subscribable (has a `subscribe` method), the router subscribes while the route stays matched
- * and re-notifies its own listeners whenever the value emits.
+ * Runs on every navigation to its route. If the resolved value is a Subscribable, the router
+ * subscribes while the route stays matched and re-notifies its own listeners whenever it emits.
  *
  * @template {Record<string, string>} P
  * @template D
@@ -17,6 +16,19 @@
  * 	searchParams: URLSearchParams;
  * 	signal: AbortSignal;
  * }) => D | Promise<D>} Loader
+ */
+
+/**
+ * Runs on POST navigations, on the deepest matched node that defines one, before any loaders.
+ *
+ * @template {Record<string, string>} P
+ * @template D
+ * @typedef {(args: {
+ * 	params: P;
+ * 	searchParams: URLSearchParams;
+ * 	formData: FormData;
+ * 	signal: AbortSignal;
+ * }) => D | Promise<D>} Action
  */
 
 /**
@@ -43,6 +55,7 @@
  * @typedef {object} RouteMeta
  * @property {RouteComponent<P, D> | LazyRoute<RouteComponent<P, D>>} [component]
  * @property {Loader<P, D>} [loader]
+ * @property {Action<P, D>} [action]
  */
 
 /**
@@ -240,7 +253,7 @@ export default class TinyRouter {
 		const pathname = this.#strip(url.pathname);
 		if (!this.#match(pathname)) return;
 		e.intercept({
-			handler: () => this.#navigate(pathname, url.searchParams, e.signal)
+			handler: () => this.#navigate(pathname, url.searchParams, e.signal, e.formData ?? undefined)
 		});
 	}
 
@@ -336,8 +349,9 @@ export default class TinyRouter {
 	 * @param {string} pathname
 	 * @param {URLSearchParams} searchParams
 	 * @param {AbortSignal} [signal]
+	 * @param {FormData} [formData]
 	 */
-	async #navigate(pathname, searchParams, signal) {
+	async #navigate(pathname, searchParams, signal, formData) {
 		this.#abort.abort();
 		const abort = (this.#abort = new AbortController());
 		signal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
@@ -347,7 +361,9 @@ export default class TinyRouter {
 		if (matched) {
 			this.#state = { ...this.#state, navigation: "loading" };
 			this.#notify();
-			await this.#resolve(matched, searchParams, signal);
+			const actionNode = formData != null ? this.#findActionNode(matched) : null;
+			if (actionNode) await this.#runAction(actionNode, searchParams, signal, formData);
+			await this.#resolve(matched, searchParams, signal, actionNode);
 		}
 
 		if (this.#abort !== abort) return;
@@ -372,17 +388,28 @@ export default class TinyRouter {
 
 	/**
 	 * Resolves lazy components and runs loaders in parallel for each node.
+	 * Skips the loader for `actionNode` — its data was already set by the action.
 	 *
 	 * @param {MatchNode} node
 	 * @param {URLSearchParams} searchParams
 	 * @param {AbortSignal} signal
+	 * @param {MatchNode | null} [actionNode]
 	 */
-	async #resolve(node, searchParams, signal) {
+	async #resolve(node, searchParams, signal, actionNode = null) {
 		await Promise.all([
 			this.#resolveComponent(node),
-			this.#runLoader(node, searchParams, signal),
-			...node.children.map(child => this.#resolve(child, searchParams, signal))
+			node !== actionNode ? this.#runLoader(node, searchParams, signal) : Promise.resolve(),
+			...node.children.map(child => this.#resolve(child, searchParams, signal, actionNode))
 		]);
+	}
+
+	/** @param {MatchNode} node @returns {MatchNode | null} */
+	#findActionNode(node) {
+		for (const child of node.children) {
+			const found = this.#findActionNode(child);
+			if (found) return found;
+		}
+		return node.route.meta.action ? node : null;
 	}
 
 	/**
@@ -409,9 +436,25 @@ export default class TinyRouter {
 	async #runLoader(node, searchParams, signal) {
 		const loader = node.route.meta.loader;
 		if (!loader) return;
-
 		try {
 			node.data = await loader({ params: node.params, searchParams, signal });
+		} catch (error) {
+			node.error ??= error;
+		}
+	}
+
+	/**
+	 * @param {MatchNode} node
+	 * @param {URLSearchParams} searchParams
+	 * @param {AbortSignal} signal
+	 * @param {FormData} formData
+	 * @returns {Promise<void>}
+	 */
+	async #runAction(node, searchParams, signal, formData) {
+		const action = node.route.meta.action;
+		if (!action) return;
+		try {
+			node.data = await action({ params: node.params, searchParams, formData, signal });
 		} catch (error) {
 			node.error ??= error;
 		}

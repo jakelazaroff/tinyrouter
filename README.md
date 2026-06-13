@@ -131,7 +131,7 @@ route(":slug", {
 });
 ```
 
-The navigation waits for the load just like it waits for loaders, so the previous page stays up until the new route can actually render. The load function runs on every navigation to the route, with the router caching nothing: `import()` makes repeat loads free via the module cache, and a failed load is naturally retried on the next visit.
+The navigation waits for the load just like it waits for `get` handlers, so the previous page stays up until the new route can actually render. The load function runs on every navigation to the route, with the router caching nothing: `import()` makes repeat loads free via the module cache, and a failed load is naturally retried on the next visit.
 
 An uncaught load failure fails the navigation like any other unrenderable error. To show the error in the route's place instead, recover inside the load function by resolving to a component:
 
@@ -150,11 +150,11 @@ route(":slug", {
 Adapters render every matched route component with the same props:
 
 - `params` — the accumulated path params, ancestors included
-- `data` — whatever the route's loader returned (see below)
+- `data` — whatever the route's handler returned (see below)
 - `pathname` — the current router-relative pathname (prefix stripped)
 - `searchParams` — the current query string, as `URLSearchParams`
 - `navigation` — `"loading"` while a navigation is in flight, otherwise `"idle"`
-- `error` — the route's own loader error (in which case `data` is undefined), otherwise `null`
+- `error` — the route's own handler's error (in which case `data` is undefined), otherwise `null`
 
 `pathname` and `searchParams` always describe the _committed_ match: while a navigation is loading, the previous view stays rendered (with `navigation: "loading"`), and they update when the new match commits.
 
@@ -185,27 +185,37 @@ router.replace("/login");
 router.push("/search", new URLSearchParams({ q: "routing" }));
 ```
 
-## Loaders and data
+## Handlers and data
 
-A route can declare a `loader` alongside its component. It receives `{ params, searchParams, signal }`, and whatever it returns (or resolves to) becomes the match node's `data` — adapters pass it to the component as the `data` prop:
+A route can declare `loader` and `action` handlers alongside its component. Whatever a handler returns (or resolves to) becomes the match node's `data`.
+
+`loader` runs on every GET navigation and receives `{ params, searchParams, signal }`. When a navigation matches several nested routes, all their loaders run in parallel.
 
 ```js
 import { route } from "./tinyrouter.js";
 
 route(":id", {
 	component: Person,
-	loader: ({ params, searchParams, signal }) =>
-		fetch(`/api/people/${params.id}`, { signal }).then(r => r.json())
+	loader: ({ params, signal }) => fetch(`/api/people/${params.id}`, { signal }).then(r => r.json())
 });
 ```
 
-Loaders run on _every_ navigation to their route. When a navigation matches several nested routes, their loaders run in parallel.
+`action` runs on POST navigations, on the deepest matched node that defines one, and receives `{ params, searchParams, formData, signal }`. It runs before loaders so loaders can read state the action mutated.
 
-The `signal` aborts a loader when a newer navigation supersedes it or when the router is disposed; pass it to `fetch` so abandoned requests are cancelled.
+```js
+route("contact", {
+	component: ContactForm,
+	action: async ({ formData, signal }) => {
+		await fetch("/api/contact", { method: "POST", body: formData, signal });
+	}
+});
+```
+
+The `signal` aborts when a newer navigation supersedes it or when the router is disposed; pass it to `fetch` so abandoned requests are cancelled.
 
 ### Subscribable data
 
-If a loader returns anything with a Svelte-store-style `subscribe(callback)` that returns an unsubscribe function, the router subscribes while the route stays matched and re-renders on every emit:
+If a handler returns anything with a Svelte-store-style `subscribe(callback)` that returns an unsubscribe function, the router subscribes while the route stays matched and re-renders on every emit:
 
 ```js
 import { route } from "./tinyrouter.js";
@@ -238,7 +248,7 @@ The callback takes no arguments — it just signals "something changed", and com
 
 ### Deferred data
 
-Awaiting in a loader is a choice: it tells the router "don't switch pages until this data exists". A navigation commits once every matched loader settles, so one slow loader holds back the whole tree. For known-slow data, opt out by returning a subscribable handle to the in-flight request instead; the loader returns immediately, so the navigation commits immediately; the route renders its own pending state; and the emit re-renders it when the data lands:
+Both `get` and `post` block navigation until they settle — the previous page stays up until every matched handler resolves. For known-slow data, opt out by returning a subscribable handle to the in-flight request instead; the handler returns immediately so the navigation commits, the route renders its own pending state, and the emit re-renders it when the data lands:
 
 ```js
 import { route, defer } from "./tinyrouter.js";
@@ -249,11 +259,11 @@ route(":id", {
 });
 ```
 
-Each loader makes this choice independently: routes that await render complete on arrival, routes that defer own their pending UI. If a deferred fetch settles before the first render, `pending` is already false — no flash.
+Each handler makes this choice independently: routes that await render complete on arrival, routes that defer own their pending UI. If a deferred fetch settles before the first render, `pending` is already false — no flash.
 
 ### Reloading
 
-To re-run the loaders for the current URL by hand, use `.reload()`:
+To re-run `get` handlers for the current URL, use `.reload()` — this always issues a GET, regardless of how the current page was reached:
 
 ```js
 await deletePost(id);
@@ -262,7 +272,7 @@ router.reload();
 
 ### Error handling
 
-If a route's loader throws or rejects, its component still renders with the error in the `error` prop and `data` undefined:
+If a route's handler throws or rejects, its component still renders with the error in the `error` prop and `data` undefined:
 
 ```js
 route(":id", {
@@ -272,7 +282,7 @@ route(":id", {
 });
 ```
 
-Errors clear on the next successful navigation; calling `router.reload()` re-runs the loaders to retry.
+Errors clear on the next successful navigation; calling `router.reload()` re-runs the handlers to retry.
 
 ## Preloading
 
@@ -284,9 +294,9 @@ const link = document.querySelector("a[href='/posts/hello']");
 link.addEventListener("pointerenter", () => router.preload("/posts/hello"));
 ```
 
-Preloading both runs loaders _and_ fetches any lazy-loaded components for matched route segments.
+Preloading both runs handlers _and_ fetches any lazy-loaded components for matched route segments.
 
-Note that there is no cache for loader data, so the loader will run again on actual navigation. To take full advantage of preloading, loaders should use a caching strategy — either the browser's built-in cache or some sort of query library. (The same goes for lazy components: the load function runs again on navigation, but for dynamic `import()` the second call is free thanks to the module cache.)
+Note that there is no cache for handler data, so the handler will run again on actual navigation. To take full advantage of preloading, handlers should use a caching strategy — either the browser's built-in cache or some sort of query library. (The same goes for lazy components: the load function runs again on navigation, but for dynamic `import()` the second call is free thanks to the module cache.)
 
 ## Router state
 
