@@ -20,9 +20,6 @@
  */
 
 /**
- * Route components receive their own params and loader data plus the shared navigation state, so a
- * component can read the query string or show a loading indicator without reaching for the router.
- *
  * @template {Record<string, string>} P
  * @template D
  * @typedef {(props: {
@@ -65,7 +62,10 @@
  * @typedef {object} MatchNode
  * @property {RouteNode} route
  * @property {Record<string, string>} params
+ * @property {RouteComponent<any, any> | undefined} component Resolved on each navigation; undefined
+ *   if the route has none or its lazy load failed.
  * @property {unknown} data
+ * @property {unknown} error Non-null when this route's own loader threw or its lazy load failed.
  * @property {MatchNode[]} children
  */
 
@@ -84,6 +84,8 @@
 const LAZY = Symbol("lazy");
 
 /**
+ * Wraps a component to be fetched on demand.
+ *
  * @template {RouteComponent<any, any>} C
  * @param {() => Promise<C>} load
  * @returns {LazyRoute<C>}
@@ -111,6 +113,39 @@ function isSubscribable(value) {
 		value !== null &&
 		typeof (/** @type {any} */ (value).subscribe) === "function"
 	);
+}
+
+/**
+ * @template T
+ * @typedef {{ pending: boolean; value: T | undefined; error: unknown } & Subscribable} Deferred
+ */
+
+/**
+ * Wraps a promise in a subscribable so it can be returned from a loader without blocking
+ * navigation. The router re-renders the route when the promise settles.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @returns {Deferred<T>}
+ */
+export function defer(promise) {
+	const listeners = new Set();
+
+	const state = /** @type {Deferred<T>} */ ({
+		pending: true,
+		value: undefined,
+		error: undefined,
+		subscribe(fn) {
+			listeners.add(fn);
+			return () => listeners.delete(fn);
+		}
+	});
+
+	promise
+		.then(value => Object.assign(state, { pending: false, value }))
+		.catch(error => Object.assign(state, { pending: false, error }))
+		.then(() => listeners.forEach(fn => fn()));
+	return state;
 }
 
 /** @param {string} segment */
@@ -316,21 +351,7 @@ export default class TinyRouter {
 		if (matched) {
 			this.#state = { ...this.#state, navigation: "loading" };
 			this.#notify();
-
-			try {
-				await this.#resolve(matched, searchParams, signal);
-			} catch (error) {
-				if (id !== this.#navigationId) return;
-				if (signal.aborted) {
-					this.#state = { ...this.#state, navigation: "idle" };
-					this.#notify();
-					return;
-				}
-				this.#unsubscribeAll();
-				this.#state = { match: null, navigation: "idle", error, pathname, searchParams };
-				this.#notify();
-				return;
-			}
+			await this.#resolve(matched, searchParams, signal);
 		}
 
 		if (id !== this.#navigationId) return;
@@ -340,9 +361,16 @@ export default class TinyRouter {
 			return;
 		}
 
+		// A failure with no component to render it fails the navigation as a whole.
+		const error = matched ? this.#unhandled(matched) : null;
+
 		this.#unsubscribeAll();
-		this.#state = { match: matched, navigation: "idle", error: null, pathname, searchParams };
-		if (matched) this.#watch(matched);
+		if (error != null) {
+			this.#state = { match: null, navigation: "idle", error, pathname, searchParams };
+		} else {
+			this.#state = { match: matched, navigation: "idle", error: null, pathname, searchParams };
+			if (matched) this.#watch(matched);
+		}
 		this.#notify();
 	}
 
@@ -355,7 +383,7 @@ export default class TinyRouter {
 	 */
 	async #resolve(node, searchParams, signal) {
 		await Promise.all([
-			this.#resolveLazy(node),
+			this.#resolveComponent(node),
 			this.#runLoader(node, searchParams, signal),
 			...node.children.map(child => this.#resolve(child, searchParams, signal))
 		]);
@@ -365,9 +393,15 @@ export default class TinyRouter {
 	 * @param {MatchNode} node
 	 * @returns {Promise<void>}
 	 */
-	async #resolveLazy(node) {
+	async #resolveComponent(node) {
 		const c = node.route.meta.component;
-		if (isLazy(c)) node.route.meta.component = await c.load();
+		try {
+			node.component = isLazy(c) ? await c.load() : c;
+		} catch (error) {
+			// Without its component the route can't render anything, so a load
+			// failure outranks any loader error on the same node.
+			node.error = error;
+		}
 	}
 
 	/**
@@ -380,7 +414,27 @@ export default class TinyRouter {
 		const loader = node.route.meta.loader;
 		if (!loader) return;
 
-		node.data = await loader({ params: node.params, searchParams, signal });
+		try {
+			node.data = await loader({ params: node.params, searchParams, signal });
+		} catch (error) {
+			node.error ??= error;
+		}
+	}
+
+	/**
+	 * Returns the first error on a node without a component, or null.
+	 *
+	 * @param {MatchNode} node
+	 * @returns {unknown}
+	 */
+	#unhandled(node) {
+		if (node.error != null && !node.component) return node.error;
+
+		for (const child of node.children) {
+			const error = this.#unhandled(child);
+			if (error != null) return error;
+		}
+		return null;
 	}
 
 	/**
@@ -390,7 +444,11 @@ export default class TinyRouter {
 	 */
 	#watch(node) {
 		if (isSubscribable(node.data)) {
-			const unsubscribe = node.data.subscribe(() => this.#notify());
+			const unsubscribe = node.data.subscribe(() => {
+				// fresh snapshot identity so getSnapshot-comparing subscribers re-render
+				this.#state = { ...this.#state };
+				this.#notify();
+			});
 			this.#unwatch.push(unsubscribe);
 		}
 
@@ -442,7 +500,16 @@ export default class TinyRouter {
 		}
 
 		const children = this.#matchChildren(node.children, segments, params);
-		return children && { route: node, params, data: undefined, children };
+		return (
+			children && {
+				route: node,
+				params,
+				component: undefined,
+				data: undefined,
+				error: null,
+				children
+			}
+		);
 	}
 
 	/**

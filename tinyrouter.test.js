@@ -352,13 +352,175 @@ describe("loaders", () => {
 	});
 });
 
+describe("errors", () => {
+	const boom = message => async () => {
+		throw new Error(message);
+	};
+
+	it("delivers a loader error to the failing route's component", async () => {
+		const root = layout({}, [index({ component: () => null, loader: boom("oops") })]);
+		const router = await makeRouter(root, "/");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(error, null);
+		assert.ok(match);
+		assert.equal(match.error, null);
+		assert.equal(match.children[0].error?.message, "oops");
+	});
+
+	it("fails the navigation when the failing route has no component", async () => {
+		const root = layout({ component: () => null }, [
+			route("a", { loader: boom("oops") }, [index({ component: () => null })])
+		]);
+		const router = await makeRouter(root, "/a");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(match, null);
+		assert.equal(error?.message, "oops");
+	});
+
+	it("fails the navigation when a lazy component fails to load", async () => {
+		const root = layout({ component: () => null }, [
+			index({
+				component: lazy(async () => {
+					throw new Error("no module");
+				})
+			})
+		]);
+		const router = await makeRouter(root, "/");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(match, null);
+		assert.equal(error?.message, "no module");
+	});
+
+	it("a failed lazy load outranks the same route's loader error", async () => {
+		const root = layout({ component: () => null }, [
+			index({
+				component: lazy(async () => {
+					throw new Error("no module");
+				}),
+				loader: boom("oops")
+			})
+		]);
+		const router = await makeRouter(root, "/");
+
+		assert.equal(router.getSnapshot().error?.message, "no module");
+	});
+
+	it("keeps simultaneous errors at multiple levels independent", async () => {
+		const root = layout({}, [
+			route("a", { component: () => null, loader: boom("outer") }, [
+				index({ component: () => null, loader: boom("inner") })
+			])
+		]);
+		const router = await makeRouter(root, "/a");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(error, null);
+		assert.equal(match?.children[0].error?.message, "outer");
+		assert.equal(match?.children[0].children[0].error?.message, "inner");
+	});
+
+	it("reports the topmost error when several routes can't render theirs", async () => {
+		const root = layout({ component: () => null }, [
+			route("a", { loader: boom("outer") }, [index({ loader: boom("inner") })])
+		]);
+		const router = await makeRouter(root, "/a");
+
+		assert.equal(router.getSnapshot().match, null);
+		assert.equal(router.getSnapshot().error?.message, "outer");
+	});
+
+	it("keeps an errored route's children matched and loaded", async () => {
+		const root = layout({}, [
+			route("a", { component: () => null, loader: boom("oops") }, [
+				index({ component: () => null, loader: async () => "ok" })
+			])
+		]);
+		const router = await makeRouter(root, "/a");
+
+		const a = router.getSnapshot().match?.children[0];
+		assert.equal(a?.error?.message, "oops");
+		assert.equal(a?.children[0].data, "ok");
+	});
+
+	it("fails the navigation when no component can render the error", async () => {
+		const root = layout({}, [index({ loader: boom("oops") })]);
+		const router = await makeRouter(root, "/");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(match, null);
+		assert.equal(error?.message, "oops");
+	});
+
+	it("clears a settled error on the next successful navigation", async () => {
+		const root = layout({}, [
+			index({ component: () => null }),
+			route("broken", { component: () => null, loader: boom("oops") }, [])
+		]);
+		const router = await makeRouter(root, "/broken");
+		assert.ok(router.getSnapshot().match?.children[0].error);
+
+		router.push("/");
+		await waitIdle(router);
+
+		assert.equal(router.getSnapshot().match?.children[0].error, null);
+	});
+});
+
 describe("lazy", () => {
-	it("resolves the component before the route becomes active", async () => {
+	it("resolves the component onto the match before the route becomes active", async () => {
 		const Comp = () => null;
 		const root = layout({}, [index({ component: lazy(async () => Comp) })]);
 		const router = await makeRouter(root, "/");
-		const indexMatch = router.getSnapshot().match?.children[0];
-		assert.equal(indexMatch?.route.meta["component"], Comp);
+		assert.equal(router.getSnapshot().match?.children[0].component, Comp);
+	});
+
+	it("never touches the route meta", async () => {
+		const wrapped = lazy(async () => () => null);
+		const root = layout({}, [index({ component: wrapped })]);
+		const router = await makeRouter(root, "/");
+		assert.equal(router.getSnapshot().match?.children[0].route.meta["component"], wrapped);
+	});
+
+	it("a load that recovers in userland renders the recovery component in place", async () => {
+		const ErrorComp = () => null;
+		const load = () => Promise.reject(new Error("no module")).then(undefined, () => ErrorComp);
+		const root = layout({}, [index({ component: lazy(load) })]);
+		const router = await makeRouter(root, "/");
+
+		const { match, error } = router.getSnapshot();
+		assert.equal(error, null);
+		assert.equal(match?.children[0].component, ErrorComp);
+	});
+
+	it("re-runs the load on every navigation, so a failed load retries", async () => {
+		let calls = 0;
+		const Comp = () => null;
+		const root = layout({}, [
+			index({}),
+			route(
+				"flaky",
+				{
+					component: lazy(async () => {
+						if (++calls === 1) throw new Error("flaky");
+						return Comp;
+					})
+				},
+				[]
+			)
+		]);
+		const router = await makeRouter(root, "/");
+
+		router.push("/flaky");
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().error?.message, "flaky");
+
+		router.push("/flaky");
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().error, null);
+		assert.equal(router.getSnapshot().match?.children[0].component, Comp);
 	});
 });
 
@@ -576,7 +738,7 @@ describe("preload", () => {
 		assert.equal(callCount, 2);
 	});
 
-	it("keeps lazy components resolved for the later navigation", async () => {
+	it("runs lazy loads, but caching them is the load function's concern", async () => {
 		let loads = 0;
 		const Comp = () => null;
 		const root = layout({}, [
@@ -596,8 +758,33 @@ describe("preload", () => {
 		router.push("/about");
 		await waitIdle(router);
 
-		assert.equal(loads, 1);
-		assert.equal(router.getSnapshot().match?.children[0].children[0].route.meta["component"], Comp);
+		// Like loaders, lazy loads re-run on the real navigation; preload warms
+		// whatever cache backs them (for dynamic import(), the module cache).
+		assert.equal(loads, 2);
+		assert.equal(router.getSnapshot().match?.children[0].children[0].component, Comp);
+	});
+
+	it("does not reject when a loader fails", async () => {
+		const root = layout({}, [
+			index({}),
+			route(
+				"broken",
+				{
+					loader: async () => {
+						throw new Error("oops");
+					}
+				},
+				[]
+			)
+		]);
+		const router = await makeRouter(root, "/");
+		const matchBefore = router.getSnapshot().match;
+
+		// preload is fire-and-forget warming; the real navigation surfaces the error
+		await router.preload("/broken");
+
+		assert.equal(router.getSnapshot().match, matchBefore);
+		assert.equal(router.getSnapshot().error, null);
 	});
 
 	it("accepts inline search params in the pathname", async () => {
@@ -724,6 +911,18 @@ describe("subscribable loader data", () => {
 
 		assert.equal(store.subscribed, 1);
 		assert.equal(notified, 1);
+	});
+
+	it("emits replace the snapshot so getSnapshot-comparing subscribers re-render", async () => {
+		const store = makeStore();
+		const root = layout({}, [index({ loader: () => store })]);
+		const router = await makeRouter(root, "/");
+
+		const before = router.getSnapshot();
+		store.emit();
+
+		assert.notEqual(router.getSnapshot(), before);
+		assert.equal(router.getSnapshot().match, before.match);
 	});
 
 	it("unsubscribes when the route is navigated away from", async () => {
@@ -919,7 +1118,7 @@ describe("preact adapter", () => {
 		const { Router } = await importPreactAdapter();
 		const C = () => null;
 		const snapshot = {
-			match: { route: { meta: { component: C } }, params: { id: "1" }, data: "d", children: [] },
+			match: { route: { meta: {} }, component: C, params: { id: "1" }, data: "d", children: [] },
 			navigation: "idle",
 			error: null,
 			pathname: "/things/1",
@@ -944,7 +1143,8 @@ describe("preact adapter", () => {
 		const { Outlet } = await importPreactAdapter();
 		const Child = () => null;
 		const child = {
-			route: { meta: { component: Child } },
+			route: { meta: {} },
+			component: Child,
 			params: { x: "1" },
 			data: 2,
 			children: []
@@ -969,6 +1169,41 @@ describe("preact adapter", () => {
 		assert.equal(leaf.props.params.x, "1");
 		assert.equal(leaf.props.pathname, "/a/b");
 		assert.equal(leaf.props.navigation, "loading");
+	});
+
+	it("renders an errored route's component with the error prop", async () => {
+		const { Outlet } = await importPreactAdapter();
+		const C = () => null;
+		const err = new Error("boom");
+		const child = {
+			route: { meta: {} },
+			component: C,
+			params: {},
+			data: undefined,
+			error: err,
+			children: [{ route: { meta: {} }, params: {}, data: undefined, error: null, children: [] }]
+		};
+		const state = {
+			match: null,
+			navigation: "idle",
+			error: null,
+			pathname: "/x",
+			searchParams: new URLSearchParams()
+		};
+		const outlet = new Outlet({});
+		outlet.context = {
+			node: { route: { meta: {} }, params: {}, data: undefined, error: null, children: [child] },
+			state
+		};
+
+		const tree = outlet.render();
+
+		const leaf = tree.children[0];
+		assert.equal(leaf.type, C);
+		assert.equal(leaf.props.error, err);
+		assert.equal(leaf.props.data, undefined);
+		// children resolved independently — the component may still render an <Outlet>
+		assert.equal(tree.props.value.node, child);
 	});
 
 	it("resubscribes when the router prop changes", async () => {

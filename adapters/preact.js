@@ -37,18 +37,13 @@ export const RouterContext = /** @type {import("preact").Context<TinyRouter | nu
 );
 
 /**
- * Renders a match node's component, providing the node as context for nested <Outlet>s.
- * Component-less nodes (pass-through layouts) defer to their first child.
- *
  * @param {MatchNode | null | undefined} node
  * @param {TinyRouterState} state
  * @returns {ComponentChildren}
  */
 function renderMatch(node, state) {
 	if (!node) return null;
-	const C = /** @type {RouteComponentType | undefined} */ (
-		/** @type {unknown} */ (node.route.meta.component)
-	);
+	const C = /** @type {RouteComponentType | undefined} */ (/** @type {unknown} */ (node.component));
 	if (!C) return renderMatch(node.children[0], state);
 	return h(
 		MatchContext.Provider,
@@ -59,7 +54,7 @@ function renderMatch(node, state) {
 			pathname: state.pathname,
 			searchParams: state.searchParams,
 			navigation: state.navigation,
-			error: state.error
+			error: node.error ?? null
 		})
 	);
 }

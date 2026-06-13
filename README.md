@@ -131,6 +131,20 @@ route(":slug", {
 });
 ```
 
+The navigation waits for the load just like it waits for loaders, so the previous page stays up until the new route can actually render. The load function runs on every navigation to the route, with the router caching nothing: `import()` makes repeat loads free via the module cache, and a failed load is naturally retried on the next visit.
+
+An uncaught load failure fails the navigation like any other unrenderable error. To show the error in the route's place instead, recover inside the load function by resolving to a component:
+
+```js
+route(":slug", {
+	component: lazy(() =>
+		import("./post.js")
+			.then(m => m.default)
+			.catch(error => () => `<p>Couldn't load this page: ${error}</p>`)
+	)
+});
+```
+
 ## Component props
 
 Adapters render every matched route component with the same props:
@@ -140,16 +154,14 @@ Adapters render every matched route component with the same props:
 - `pathname` — the current router-relative pathname (prefix stripped)
 - `searchParams` — the current query string, as `URLSearchParams`
 - `navigation` — `"loading"` while a navigation is in flight, otherwise `"idle"`
-- `error` — the error from a failed navigation, otherwise `null`
+- `error` — the route's own loader error (in which case `data` is undefined), otherwise `null`
 
-`pathname` and `searchParams` always describe the *committed* match: while a navigation is loading, the previous view stays rendered (with `navigation: "loading"`), and they update when the new match commits.
+`pathname` and `searchParams` always describe the _committed_ match: while a navigation is loading, the previous view stays rendered (with `navigation: "loading"`), and they update when the new match commits.
 
 ```js
 route("search", {
 	component: ({ searchParams, navigation }) =>
-		navigation === "loading"
-			? `<p>Searching…</p>`
-			: `<p>Results for ${searchParams.get("q")}</p>`
+		navigation === "loading" ? `<p>Searching…</p>` : `<p>Results for ${searchParams.get("q")}</p>`
 });
 ```
 
@@ -224,6 +236,21 @@ route("live", {
 
 The callback takes no arguments — it just signals "something changed", and components read the current value off `data`. When a navigation moves away from the route, the router unsubscribes.
 
+### Deferred data
+
+Awaiting in a loader is a choice: it tells the router "don't switch pages until this data exists". A navigation commits once every matched loader settles, so one slow loader holds back the whole tree. For known-slow data, opt out by returning a subscribable handle to the in-flight request instead; the loader returns immediately, so the navigation commits immediately; the route renders its own pending state; and the emit re-renders it when the data lands:
+
+```js
+import { route, defer } from "./tinyrouter.js";
+
+route(":id", {
+	loader: ({ params, signal }) => defer(fetchPost(params.id, { signal })),
+	component: ({ data }) => (data.pending ? `<p>Loading…</p>` : `<article>${data.value}</article>`)
+});
+```
+
+Each loader makes this choice independently: routes that await render complete on arrival, routes that defer own their pending UI. If a deferred fetch settles before the first render, `pending` is already false — no flash.
+
 ### Reloading
 
 To re-run the loaders for the current URL by hand, use `.reload()`:
@@ -235,7 +262,17 @@ router.reload();
 
 ### Error handling
 
-If a loader throws or rejects, the navigation fails and the error lands on router state: `{ match: null, navigation: "idle", error }`. The Preact adapter's `<Router>` renders its `fallback={error => ...}` prop in that case. The error clears on the next successful navigation.
+If a route's loader throws or rejects, its component still renders with the error in the `error` prop and `data` undefined:
+
+```js
+route(":id", {
+	loader: ({ params, signal }) => fetchPost(params.id, { signal }),
+	component: ({ data, error }) =>
+		error ? `<p>Couldn't load the post.</p>` : `<article>${data.title}</article>`
+});
+```
+
+Errors clear on the next successful navigation; calling `router.reload()` re-runs the loaders to retry.
 
 ## Preloading
 
@@ -249,7 +286,7 @@ link.addEventListener("pointerenter", () => router.preload("/posts/hello"));
 
 Preloading both runs loaders _and_ fetches any lazy-loaded components for matched route segments.
 
-Note that there is no cache for loader data, so the loader will run again on actual navigation. To take full advantage of preloading, loaders should use a caching strategy — either the browser's built-in cache or some sort of query library.
+Note that there is no cache for loader data, so the loader will run again on actual navigation. To take full advantage of preloading, loaders should use a caching strategy — either the browser's built-in cache or some sort of query library. (The same goes for lazy components: the load function runs again on navigation, but for dynamic `import()` the second call is free thanks to the module cache.)
 
 ## Router state
 
