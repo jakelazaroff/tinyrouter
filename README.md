@@ -270,6 +270,24 @@ await deletePost(id);
 router.reload();
 ```
 
+### Redirects
+
+To redirect from a loader or action, throw a `redirect`:
+
+```js
+import { route, redirect } from "./tinyrouter.js";
+
+route("dashboard", {
+	loader: () => {
+		if (!isLoggedIn()) throw redirect("/login");
+		return fetchDashboard();
+	},
+	component: Dashboard
+});
+```
+
+The redirect always replaces the current history entry so the redirected-from URL is skipped in the back stack.
+
 ### Error handling
 
 If a route's handler throws or rejects, its component still renders with the error in the `error` prop and `data` undefined:

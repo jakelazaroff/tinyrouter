@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import TinyRouter, { layout, route, index, splat, lazy } from "./tinyrouter.js";
+import TinyRouter, { layout, route, index, splat, lazy, redirect } from "./tinyrouter.js";
 
 // --- helpers ---
 
@@ -467,6 +467,44 @@ describe("errors", () => {
 		await waitIdle(router);
 
 		assert.equal(router.getSnapshot().match?.children[0].error, null);
+	});
+});
+
+describe("redirects", () => {
+	it("redirects from a loader to another route", async () => {
+		const root = layout({}, [
+			index({ component: () => "home" }),
+			route("protected", { loader: () => { throw redirect("/"); }, component: () => "protected" }, [index({})])
+		]);
+		const router = await makeRouter(root, "/protected");
+		assert.equal(router.getSnapshot().pathname, "/");
+	});
+
+	it("redirects from an action to another route", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const root = layout({}, [
+			index({ component: () => "home" }),
+			route("submit", { action: () => { throw redirect("/"); } }, [index({})])
+		]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		navigation.navigate("/submit", { formData: new FormData() });
+		await waitIdle(router);
+		assert.equal(router.getSnapshot().pathname, "/");
+	});
+
+	it("redirect uses history replace so the source URL is skipped in the back stack", async () => {
+		const navigation = new FakeNavigation("http://localhost/");
+		const root = layout({}, [
+			index({ component: () => "home" }),
+			route("guarded", { loader: () => { throw redirect("/"); }, component: () => null }, [index({})])
+		]);
+		const router = new TinyRouter(root, { navigation });
+		await waitIdle(router);
+		// FakeNavigation advances currentEntry only when intercepted; redirect re-navigates to "/"
+		navigation.navigate("/guarded");
+		await waitIdle(router);
+		assert.equal(navigation.currentEntry.url, "http://localhost/");
 	});
 });
 

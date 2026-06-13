@@ -95,6 +95,23 @@
  */
 
 const LAZY = Symbol("lazy");
+const REDIRECT = Symbol("redirect");
+
+/**
+ * Thrown from a loader or action to redirect to another route. Always replaces the current
+ * history entry so the redirected-from URL is skipped in the back stack.
+ *
+ * @param {string} pathname
+ * @param {URLSearchParams} [searchParams]
+ */
+export function redirect(pathname, searchParams) {
+	return { [REDIRECT]: true, pathname, searchParams };
+}
+
+/** @param {unknown} value @returns {value is { pathname: string; searchParams?: URLSearchParams }} */
+function isRedirect(value) {
+	return typeof value === "object" && value !== null && REDIRECT in value;
+}
 
 /**
  * Wraps a component to be fetched on demand.
@@ -373,6 +390,15 @@ export default class TinyRouter {
 			return;
 		}
 
+		const redirectTarget = matched ? this.#findRedirect(matched) : null;
+		if (redirectTarget != null) {
+			this.#navigation.navigate(
+				this.href(redirectTarget.pathname, redirectTarget.searchParams),
+				{ history: "replace" }
+			);
+			return;
+		}
+
 		// A failure with no component to render it fails the navigation as a whole.
 		const error = matched ? this.#unhandled(matched) : null;
 
@@ -410,6 +436,16 @@ export default class TinyRouter {
 			if (found) return found;
 		}
 		return node.route.meta.action ? node : null;
+	}
+
+	/** @param {MatchNode} node @returns {{ pathname: string; searchParams?: URLSearchParams } | null} */
+	#findRedirect(node) {
+		if (isRedirect(node.error)) return /** @type {any} */ (node.error);
+		for (const child of node.children) {
+			const found = this.#findRedirect(child);
+			if (found) return found;
+		}
+		return null;
 	}
 
 	/**
