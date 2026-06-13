@@ -182,7 +182,7 @@ To navigate programmatically, you can use `.push()` and `.replace()`:
 ```js
 router.push("/posts/hello");
 router.replace("/login");
-router.push("/search", new URLSearchParams({ q: "routing" }));
+router.push("/search?q=routing");
 ```
 
 ## Handlers and data

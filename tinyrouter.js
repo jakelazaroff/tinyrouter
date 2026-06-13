@@ -101,14 +101,13 @@ const REDIRECT = Symbol("redirect");
  * Thrown from a loader or action to redirect to another route. Always replaces the current
  * history entry so the redirected-from URL is skipped in the back stack.
  *
- * @param {string} pathname
- * @param {URLSearchParams} [searchParams]
+ * @param {string} path
  */
-export function redirect(pathname, searchParams) {
-	return { [REDIRECT]: true, pathname, searchParams };
+export function redirect(path) {
+	return { [REDIRECT]: true, path };
 }
 
-/** @param {unknown} value @returns {value is { pathname: string; searchParams?: URLSearchParams }} */
+/** @param {unknown} value @returns {value is { path: string }} */
 function isRedirect(value) {
 	return typeof value === "object" && value !== null && REDIRECT in value;
 }
@@ -295,16 +294,15 @@ export default class TinyRouter {
 	}
 
 	/**
-	 * Builds a browser URL string from a router-relative pathname + search. Useful for `<a href>` so
-	 * the link's hover preview shows the real URL.
+	 * Builds a browser URL string from a router-relative path. Useful for `<a href>` so the link's
+	 * hover preview shows the real URL.
 	 *
-	 * @param {string} pathname
-	 * @param {URLSearchParams} [searchParams]
+	 * @param {string} path
 	 */
-	href(pathname, searchParams) {
-		const path = pathname === "/" ? this.#prefix || "/" : this.#prefix + pathname;
-		const search = searchParams?.toString();
-		return search ? `${path}?${search}` : path;
+	href(path) {
+		const url = new URL(path, "http://x");
+		const prefixed = url.pathname === "/" ? this.#prefix || "/" : this.#prefix + url.pathname;
+		return url.search ? prefixed + url.search : prefixed;
 	}
 
 	/**
@@ -321,38 +319,25 @@ export default class TinyRouter {
 		return this.#state;
 	}
 
-	/** @param {string} pathname @param {URLSearchParams} [searchParams] */
-	push(pathname, searchParams = new URLSearchParams()) {
-		this.#go(pathname, searchParams, false);
-	}
+	/** @param {string} path */
+	push(path) { this.#go(path, false); }
 
-	/** @param {string} pathname @param {URLSearchParams} [searchParams] */
-	replace(pathname, searchParams = new URLSearchParams()) {
-		this.#go(pathname, searchParams, true);
-	}
+	/** @param {string} path */
+	replace(path) { this.#go(path, true); }
 
-	/**
-	 * @param {string} pathname
-	 * @param {URLSearchParams} searchParams
-	 * @param {boolean} replace
-	 */
-	#go(pathname, searchParams, replace) {
-		this.#navigation.navigate(this.href(pathname, searchParams), {
-			history: replace ? "replace" : "auto"
-		});
+	/** @param {string} path @param {boolean} replace */
+	#go(path, replace) {
+		this.#navigation.navigate(this.href(path), { history: replace ? "replace" : "auto" });
 	}
 
 	/**
-	 * Resolves lazy components and runs loaders for `pathname` without affecting the current view.
+	 * Resolves lazy components and runs loaders for `path` without affecting the current view.
 	 *
-	 * @param {string} pathname
-	 * @param {URLSearchParams} [searchParams]
+	 * @param {string} path
 	 */
-	async preload(pathname, searchParams = new URLSearchParams()) {
-		const url = new URL(pathname, this.#location());
-		if (arguments.length > 1) url.search = searchParams.toString();
+	async preload(path) {
+		const url = new URL(path, this.#location());
 		const matched = this.#match(this.#strip(url.pathname));
-
 		// a preload isn't tied to a navigation, so nothing ever aborts its signal
 		if (matched) await this.#resolve(matched, url.searchParams, new AbortController().signal);
 	}
@@ -392,10 +377,7 @@ export default class TinyRouter {
 
 		const redirectTarget = matched ? this.#findRedirect(matched) : null;
 		if (redirectTarget != null) {
-			this.#navigation.navigate(
-				this.href(redirectTarget.pathname, redirectTarget.searchParams),
-				{ history: "replace" }
-			);
+			this.#navigation.navigate(this.href(redirectTarget.path), { history: "replace" });
 			return;
 		}
 

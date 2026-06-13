@@ -670,7 +670,7 @@ describe("location", () => {
 		const root = layout({}, [index({}), route("about", {}, [index({})])]);
 		const router = await makeRouter(root, "/");
 
-		router.push("/about", new URLSearchParams({ tag: "b" }));
+		router.push("/about?tag=b");
 		await waitIdle(router);
 
 		assert.equal(router.getSnapshot().pathname, "/about");
@@ -761,9 +761,9 @@ describe("href", () => {
 		assert.equal(router.href("/"), "/app");
 	});
 
-	it("appends serialised search params", async () => {
+	it("preserves search params in the path", async () => {
 		const router = await makeRouter(layout({}, [index({})]), "/");
-		assert.equal(router.href("/search", new URLSearchParams({ q: "hi" })), "/search?q=hi");
+		assert.equal(router.href("/search?q=hi"), "/search?q=hi");
 	});
 });
 
