@@ -131,7 +131,7 @@ route(":slug", {
 });
 ```
 
-The navigation waits for the load just like it waits for `get` handlers, so the previous page stays up until the new route can actually render. The load function runs on every navigation to the route, with the router caching nothing: `import()` makes repeat loads free via the module cache, and a failed load is naturally retried on the next visit.
+The navigation waits for the load just like it waits for loaders, so the previous page stays up until the new route can actually render. The load function runs on every navigation to the route, with the router caching nothing: `import()` makes repeat loads free via the module cache, and a failed load is naturally retried on the next visit.
 
 An uncaught load failure fails the navigation like any other unrenderable error. To show the error in the route's place instead, recover inside the load function by resolving to a component:
 
@@ -248,7 +248,7 @@ The callback takes no arguments — it just signals "something changed", and com
 
 ### Deferred data
 
-Both `get` and `post` block navigation until they settle — the previous page stays up until every matched handler resolves. For known-slow data, opt out by returning a subscribable handle to the in-flight request instead; the handler returns immediately so the navigation commits, the route renders its own pending state, and the emit re-renders it when the data lands:
+Both loaders and actions block navigation until they settle — the previous page stays up until every matched handler resolves. For known-slow data, opt out by returning a subscribable handle to the in-flight request instead; the handler returns immediately so the navigation commits, the route renders its own pending state, and the emit re-renders it when the data lands:
 
 ```js
 import { route, defer } from "./tinyrouter.js";
@@ -263,7 +263,7 @@ Each handler makes this choice independently: routes that await render complete 
 
 ### Reloading
 
-To re-run `get` handlers for the current URL, use `.reload()` — this always issues a GET, regardless of how the current page was reached:
+To re-run loaders for the current URL, use `.reload()` — this always runs loaders, not actions, regardless of how the current page was reached:
 
 ```js
 await deletePost(id);
