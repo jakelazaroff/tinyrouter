@@ -167,9 +167,6 @@ export default class TinyRouter {
 	/** @type {RouteNode} */
 	#root;
 
-	/** @type {number} */
-	#navigationId = 0;
-
 	#abort = new AbortController();
 
 	/**
@@ -246,8 +243,7 @@ export default class TinyRouter {
 	}
 
 	dispose() {
-		this.#navigationId++;
-		this.#abort?.abort();
+		this.#abort.abort();
 		this.#navigation.removeEventListener("navigate", this.#onNavigate);
 		this.#unsubscribeAll();
 		this.#listeners.clear();
@@ -340,11 +336,9 @@ export default class TinyRouter {
 	 * @param {AbortSignal} [signal]
 	 */
 	async #navigate(pathname, searchParams, signal) {
-		const id = ++this.#navigationId;
-
-		this.#abort?.abort();
-		this.#abort = new AbortController();
-		signal = signal ? AbortSignal.any([signal, this.#abort.signal]) : this.#abort.signal;
+		this.#abort.abort();
+		const abort = (this.#abort = new AbortController());
+		signal = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
 
 		const matched = this.#match(pathname);
 
@@ -354,7 +348,7 @@ export default class TinyRouter {
 			await this.#resolve(matched, searchParams, signal);
 		}
 
-		if (id !== this.#navigationId) return;
+		if (this.#abort !== abort) return;
 		if (signal.aborted) {
 			this.#state = { ...this.#state, navigation: "idle" };
 			this.#notify();
